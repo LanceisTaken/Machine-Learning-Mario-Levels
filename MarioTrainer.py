@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
+import glob
 from sklearn.model_selection import train_test_split
 
 # Step 1: Data Preprocessing
@@ -12,36 +13,56 @@ class MarioLevelDataset(Dataset):
     def __init__(self, level_files):
         self.levels = []
         self.char_to_int = self._create_mapping()
+        self.original_shapes = []
         
-        # Load and process your level files
+        # Load and process your level files - keep original sizes
         for level_file in level_files:
             level = self._load_level(level_file)
             self.levels.append(level)
+            self.original_shapes.append(level.shape)
+        
+        # Find max dimensions across all levels for padding reference
+        max_height = max(shape[0] for shape in self.original_shapes)
+        max_width = max(shape[1] for shape in self.original_shapes)
+        
+        print(f"Loaded {len(self.levels)} levels")
+        print(f"Level dimensions range: {min(self.original_shapes)} to {max(self.original_shapes)}")
+        print(f"Max dimensions: [{max_height}, {max_width}]")
     
     def _create_mapping(self):
         # Create mapping from characters to integers
         # Add more characters based on your actual level files
         chars = ['-', '#', 'B', 'p', 'g', 'M', '?', '!', 'E', 'G', 'k', 'r', 'y', 'Y', 'X', 'S', '%', '|', '*']
         char_to_int = {char: i for i, char in enumerate(chars)}
-        char_to_int['PAD'] = len(chars)  # For padding shorter levels
         return char_to_int
     
     def _load_level(self, level_file):
-        # This is where you'd load your actual level files
-        # For now, I'll show you how to process the format you showed
+        # Load your actual level files without any resizing
         with open(level_file, 'r') as f:
             lines = f.readlines()
         
         # Convert to integer representation
         level_grid = []
         for line in lines:
+            # Remove line numbers and extra characters if present
+            clean_line = line.strip()
+            if clean_line.startswith(tuple('0123456789')):
+                # Remove line numbers (e.g., "1   ----------" becomes "----------")
+                parts = clean_line.split(None, 1)
+                if len(parts) > 1:
+                    clean_line = parts[1]
+                else:
+                    clean_line = ""
+            
             row = []
-            for char in line.strip():
+            for char in clean_line:
                 if char in self.char_to_int:
                     row.append(self.char_to_int[char])
                 else:
                     row.append(self.char_to_int['-'])  # Default to empty space
-            level_grid.append(row)
+            
+            if row:  # Only add non-empty rows
+                level_grid.append(row)
         
         return np.array(level_grid, dtype=np.float32)
     
@@ -50,11 +71,49 @@ class MarioLevelDataset(Dataset):
     
     def __getitem__(self, idx):
         level = self.levels[idx]
-        # Convert to tensor and add batch dimension for CNN
-        level_tensor = torch.FloatTensor(level).unsqueeze(0)  # Add channel dimension
-        return level_tensor, level_tensor  # Input and target are the same for autoencoder
+        # Normalize values to 0-1 range for better training
+        level_normalized = level / len(self.char_to_int)
+        # Convert to tensor and add channel dimension for CNN
+        level_tensor = torch.FloatTensor(level_normalized).unsqueeze(0)
+        
+        # Return level with its original shape information
+        return level_tensor, level_tensor, level.shape
 
-# Step 2: Define the Autoencoder Model
+# Custom collate function to handle different sized levels
+def collate_levels(batch):
+    """Custom collate function that pads levels to the same size within each batch"""
+    inputs, targets, shapes = zip(*batch)
+    
+    # Find max dimensions in this batch
+    max_height = max(shape[0] for shape in shapes)
+    max_width = max(shape[1] for shape in shapes)
+    
+    # Pad all levels in the batch to the same size
+    padded_inputs = []
+    padded_targets = []
+    
+    for inp, tgt in zip(inputs, targets):
+        # Current size
+        _, curr_h, curr_w = inp.shape
+        
+        # Pad to max size
+        pad_h = max_height - curr_h
+        pad_w = max_width - curr_w
+        
+        # Pad with zeros (which represents empty space after normalization)
+        padded_inp = torch.nn.functional.pad(inp, (0, pad_w, 0, pad_h), value=0)
+        padded_tgt = torch.nn.functional.pad(tgt, (0, pad_w, 0, pad_h), value=0)
+        
+        padded_inputs.append(padded_inp)
+        padded_targets.append(padded_tgt)
+    
+    # Stack into batch tensors
+    batch_inputs = torch.stack(padded_inputs)
+    batch_targets = torch.stack(padded_targets)
+    
+    return batch_inputs, batch_targets
+
+# Step 2: Define the Autoencoder Model (Adaptive to any input size)
 class MarioAutoencoder(nn.Module):
     def __init__(self, input_channels=1):
         super(MarioAutoencoder, self).__init__()
@@ -63,11 +122,11 @@ class MarioAutoencoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(input_channels, 16, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),  # Reduce size by half
+            nn.AdaptiveMaxPool2d((7, 50)),  # Adaptive pooling to fixed size
             
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),  # Reduce size by half again
+            nn.AdaptiveMaxPool2d((4, 25)),  # Further compression
             
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -77,21 +136,30 @@ class MarioAutoencoder(nn.Module):
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(64, 32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Upsample(scale_factor=2),  # Double the size
             
             nn.ConvTranspose2d(32, 16, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Upsample(scale_factor=2),  # Double the size again
             
             nn.ConvTranspose2d(16, input_channels, kernel_size=3, padding=1),
             nn.Sigmoid()  # Output values between 0 and 1
         )
     
     def forward(self, x):
-        # Pass through encoder then decoder
+        batch_size, channels, height, width = x.shape
+        
+        # Pass through encoder
         encoded = self.encoder(x)
+        
+        # Pass through decoder  
         decoded = self.decoder(encoded)
-        return decoded
+        
+        # Resize back to original input size using interpolation
+        final_output = nn.functional.interpolate(decoded, 
+                                                size=(height, width), 
+                                                mode='bilinear', 
+                                                align_corners=False)
+        
+        return final_output
 
 # Step 3: Training Function
 def train_model(model, train_loader, num_epochs=50, learning_rate=0.001):
@@ -166,28 +234,37 @@ def visualize_levels(original, reconstructed, generated=None):
 def main():
     # 1. Prepare your data
     # Replace this with paths to your actual level files
-    level_files = ['level1.txt', 'level2.txt', 'level3.txt']  # Your level files
+    level_files = glob.glob(r"C:\Users\User\Documents\GitHub\Machine-Learning---Mario-Levels\Levels\*.txt")  # Your level files
+    
+    # You can also automatically find all .txt files in a directory:
+    # import glob
+    # level_files = glob.glob("path/to/your/levels/*.txt")
     
     # Create dataset and split into train/validation
     try:
+        # No resizing - keep original level dimensions
         dataset = MarioLevelDataset(level_files)
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
         
-        # Create data loaders
-        train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
+        # Create data loaders with custom collate function
+        train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, collate_fn=collate_levels)
+        val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, collate_fn=collate_levels)
         
         print(f"Dataset loaded: {len(dataset)} levels")
         print(f"Training samples: {len(train_dataset)}, Validation samples: {len(val_dataset)}")
         
-    except FileNotFoundError:
-        print("Level files not found. Please update the file paths in level_files list.")
+    except FileNotFoundError as e:
+        print(f"Level files not found: {e}")
+        print("Please update the file paths in level_files list.")
+        return
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
         return
     
-    # 2. Create and train the model
-    model = MarioAutoencoder()
+    # 2. Create and train the model  
+    model = MarioAutoencoder()  # Now adaptive to any input size
     print("Model created:", model)
     
     # 3. Train the model
@@ -244,7 +321,8 @@ def convert_level_to_text(level_array, int_to_char=None):
     for row in level_array:
         text_row = ""
         for val in row:
-            char_idx = int(round(val))
+            # Denormalize from 0-1 range back to character indices
+            char_idx = int(round(val * len(int_to_char)))
             char_idx = max(0, min(char_idx, len(int_to_char)-1))  # Clamp to valid range
             text_row += int_to_char.get(char_idx, '-')
         text_level.append(text_row)
