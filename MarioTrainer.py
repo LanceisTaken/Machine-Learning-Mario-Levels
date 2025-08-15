@@ -13,6 +13,7 @@ class MarioLevelDataset(Dataset):
     def __init__(self, level_files):
         self.levels = []
         self.char_to_int = self._create_mapping()
+        self.int_to_char = {v: k for k, v in self.char_to_int.items()}  # Reverse mapping
         self.original_shapes = []
         
         # Load and process your level files - keep original sizes
@@ -28,6 +29,7 @@ class MarioLevelDataset(Dataset):
         print(f"Loaded {len(self.levels)} levels")
         print(f"Level dimensions range: {min(self.original_shapes)} to {max(self.original_shapes)}")
         print(f"Max dimensions: [{max_height}, {max_width}]")
+        print(f"Character mapping: {self.char_to_int}")
     
     def _create_mapping(self):
         # Create mapping from characters to integers
@@ -64,22 +66,24 @@ class MarioLevelDataset(Dataset):
             if row:  # Only add non-empty rows
                 level_grid.append(row)
         
-        return np.array(level_grid, dtype=np.float32)
+        return np.array(level_grid, dtype=np.int64)  # Use int64 for CrossEntropyLoss
     
     def __len__(self):
         return len(self.levels)
     
     def __getitem__(self, idx):
         level = self.levels[idx]
-        # Normalize values to 0-1 range for better training
-        level_normalized = level / len(self.char_to_int)
-        # Convert to tensor and add channel dimension for CNN
-        level_tensor = torch.FloatTensor(level_normalized).unsqueeze(0)
         
-        # Return level with its original shape information
-        return level_tensor, level_tensor, level.shape
+        # For input: normalize to 0-1 range for the encoder
+        level_input = torch.FloatTensor(level / len(self.char_to_int)).unsqueeze(0)
+        
+        # For target: keep as integer indices for CrossEntropyLoss
+        level_target = torch.LongTensor(level)
+        
+        # Return input, target, and original shape information
+        return level_input, level_target, level.shape
 
-# Custom collate function to handle different sized levels
+# Custom collate function to handle different sized levels (updated for classification)
 def collate_levels(batch):
     """Custom collate function that pads levels to the same size within each batch"""
     inputs, targets, shapes = zip(*batch)
@@ -95,13 +99,16 @@ def collate_levels(batch):
     for inp, tgt in zip(inputs, targets):
         # Current size
         _, curr_h, curr_w = inp.shape
+        tgt_h, tgt_w = tgt.shape
         
         # Pad to max size
         pad_h = max_height - curr_h
         pad_w = max_width - curr_w
         
-        # Pad with zeros (which represents empty space after normalization)
+        # Pad inputs with zeros (normalized empty space)
         padded_inp = torch.nn.functional.pad(inp, (0, pad_w, 0, pad_h), value=0)
+        
+        # Pad targets with 0 (empty space class index)
         padded_tgt = torch.nn.functional.pad(tgt, (0, pad_w, 0, pad_h), value=0)
         
         padded_inputs.append(padded_inp)
@@ -113,35 +120,38 @@ def collate_levels(batch):
     
     return batch_inputs, batch_targets
 
-# Step 2: Define the Autoencoder Model (Adaptive to any input size)
+# Step 2: Define the Autoencoder Model (Discrete outputs for Mario levels)
 class MarioAutoencoder(nn.Module):
-    def __init__(self, input_channels=1):
+    def __init__(self, input_channels=1, num_classes=19):  # 19 different Mario tile types
         super(MarioAutoencoder, self).__init__()
+        
+        self.num_classes = num_classes
         
         # Encoder - compresses the level into a smaller representation
         self.encoder = nn.Sequential(
-            nn.Conv2d(input_channels, 16, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.AdaptiveMaxPool2d((7, 50)),  # Adaptive pooling to fixed size
             
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.AdaptiveMaxPool2d((4, 25)),  # Further compression
             
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
         )
         
         # Decoder - reconstructs the level from compressed representation
         self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            
             nn.ConvTranspose2d(64, 32, kernel_size=3, padding=1),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(32, 16, kernel_size=3, padding=1),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(16, input_channels, kernel_size=3, padding=1),
-            nn.Sigmoid()  # Output values between 0 and 1
+            # Output logits for each tile class (not probabilities yet)
+            nn.ConvTranspose2d(32, num_classes, kernel_size=3, padding=1),
+            # No activation here - we'll use CrossEntropyLoss
         )
     
     def forward(self, x):
@@ -150,26 +160,35 @@ class MarioAutoencoder(nn.Module):
         # Pass through encoder
         encoded = self.encoder(x)
         
-        # Pass through decoder  
-        decoded = self.decoder(encoded)
+        # Pass through decoder to get logits
+        decoded_logits = self.decoder(encoded)
         
-        # Resize back to original input size using interpolation
-        final_output = nn.functional.interpolate(decoded, 
+        # Resize back to original input size
+        final_logits = nn.functional.interpolate(decoded_logits, 
                                                 size=(height, width), 
                                                 mode='bilinear', 
                                                 align_corners=False)
         
-        return final_output
+        return final_logits
+    
+    def generate_discrete_output(self, x):
+        """Generate discrete tile indices (for visualization/generation)"""
+        with torch.no_grad():
+            logits = self.forward(x)
+            # Get the most probable tile for each position
+            discrete_output = torch.argmax(logits, dim=1, keepdim=True).float()
+            return discrete_output
 
-# Step 3: Training Function
+# Step 3: Training Function (Updated for classification)
 def train_model(model, train_loader, num_epochs=50, learning_rate=0.001):
     # Set device (GPU if available, otherwise CPU)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     
-    # Define loss function and optimizer
-    criterion = nn.MSELoss()  # Mean Squared Error for reconstruction
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    # Define loss function and optimizer for classification
+    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore padding if needed
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
     
     # Training loop
     train_losses = []
@@ -177,6 +196,8 @@ def train_model(model, train_loader, num_epochs=50, learning_rate=0.001):
     for epoch in range(num_epochs):
         model.train()
         epoch_loss = 0.0
+        correct_predictions = 0
+        total_predictions = 0
         
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
@@ -184,21 +205,37 @@ def train_model(model, train_loader, num_epochs=50, learning_rate=0.001):
             # Clear gradients
             optimizer.zero_grad()
             
-            # Forward pass
-            output = model(data)
-            loss = criterion(output, target)
+            # Forward pass - model outputs logits for each class
+            output_logits = model(data)
+            
+            # Reshape for CrossEntropyLoss: (batch, classes, height, width) -> (batch*height*width, classes)
+            batch_size, num_classes, height, width = output_logits.shape
+            output_logits_reshaped = output_logits.permute(0, 2, 3, 1).contiguous().view(-1, num_classes)
+            target_reshaped = target.view(-1)
+            
+            # Calculate loss
+            loss = criterion(output_logits_reshaped, target_reshaped)
             
             # Backward pass
             loss.backward()
             optimizer.step()
             
+            # Calculate accuracy
+            _, predicted = torch.max(output_logits_reshaped, 1)
+            correct_predictions += (predicted == target_reshaped).sum().item()
+            total_predictions += target_reshaped.size(0)
+            
             epoch_loss += loss.item()
         
         avg_loss = epoch_loss / len(train_loader)
+        accuracy = 100. * correct_predictions / total_predictions
         train_losses.append(avg_loss)
         
+        # Update learning rate
+        scheduler.step(avg_loss)
+        
         if epoch % 10 == 0:
-            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}')
+            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
     
     return train_losses
 
@@ -210,20 +247,46 @@ def generate_level(model, reference_level, device):
         generated = model(reference_tensor)
         return generated.cpu().squeeze().numpy()
 
-# Step 5: Visualization
-def visualize_levels(original, reconstructed, generated=None):
-    fig, axes = plt.subplots(1, 3 if generated is not None else 2, figsize=(15, 5))
+# Step 5: Visualization (Updated for discrete outputs)
+def visualize_levels(original, reconstructed, dataset=None, generated=None):
+    """Visualize original and reconstructed levels with proper character mapping"""
     
-    axes[0].imshow(original, cmap='viridis')
+    # Convert reconstructed logits/indices back to character display
+    if dataset is not None:
+        int_to_char = dataset.int_to_char
+        
+        # Create text representation for better visualization
+        def array_to_text(arr):
+            if len(arr.shape) == 2:  # 2D array
+                text_lines = []
+                for row in arr:
+                    line = ''.join([int_to_char.get(int(val), '-') for val in row])
+                    text_lines.append(line)
+                return '\n'.join(text_lines)
+            return str(arr)
+        
+        print("Original Level:")
+        print(array_to_text(original))
+        print("\nReconstructed Level:")
+        print(array_to_text(reconstructed))
+        
+        if generated is not None:
+            print("\nGenerated Level:")
+            print(array_to_text(generated))
+    
+    # Visual plot
+    fig, axes = plt.subplots(1, 3 if generated is not None else 2, figsize=(20, 6))
+    
+    axes[0].imshow(original, cmap='tab20', aspect='auto')
     axes[0].set_title('Original Level')
     axes[0].axis('off')
     
-    axes[1].imshow(reconstructed, cmap='viridis')
+    axes[1].imshow(reconstructed, cmap='tab20', aspect='auto')
     axes[1].set_title('Reconstructed Level')
     axes[1].axis('off')
     
     if generated is not None:
-        axes[2].imshow(generated, cmap='viridis')
+        axes[2].imshow(generated, cmap='tab20', aspect='auto')
         axes[2].set_title('Generated Level')
         axes[2].axis('off')
     
@@ -275,27 +338,30 @@ def main():
     torch.save(model.state_dict(), 'mario_autoencoder.pth')
     print("Model saved as 'mario_autoencoder.pth'")
     
-    # 5. Test the model (generate a level)
+    # 5. Test the model (generate a level) - Updated for discrete output
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.eval()
     
     # Get a sample from validation set
-    sample_data, _ = next(iter(val_loader))
+    sample_data, sample_target = next(iter(val_loader))
+    
     with torch.no_grad():
-        reconstructed = model(sample_data.to(device))
+        # Get discrete reconstruction
+        reconstructed_discrete = model.generate_discrete_output(sample_data.to(device))
     
-    # Visualize results
-    original = sample_data[0].squeeze().numpy()
-    recon = reconstructed[0].cpu().squeeze().numpy()
+    # Convert to numpy for visualization
+    original = sample_target[0].cpu().numpy()
+    reconstructed = reconstructed_discrete[0].cpu().squeeze().numpy()
     
-    visualize_levels(original, recon)
+    # Visualize results with character mapping
+    visualize_levels(original, reconstructed, dataset)
     
     # Plot training loss
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses)
     plt.title('Training Loss Over Time')
     plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.ylabel('CrossEntropy Loss')
     plt.show()
 
 if __name__ == "__main__":
