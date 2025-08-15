@@ -1,0 +1,19 @@
+# - Ground
+? - Lucky Blocks
+g - Goomba/Enemies
+M - Predetermined Lucky Blocks(Set Outcome for rewards)
+[] - Pipe Entrance
+pP - Pipe Body
++ - Invisible Predetermined Lucky Block
+O - Coin Brick
+* - Star Lucky Block
+k - koompa troopa
+V - Chomper
+K - Flying Koompa
+y - Spring Base
+Y - Spring Platform
+o - Coin
+c- Canon Base
+C- Canon Head
+t- Some black enemy
+l - enemy in the cloud
