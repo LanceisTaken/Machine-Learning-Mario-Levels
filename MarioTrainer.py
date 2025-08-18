@@ -32,9 +32,34 @@ class MarioLevelDataset(Dataset):
         print(f"Character mapping: {self.char_to_int}")
     
     def _create_mapping(self):
-        # Create mapping from characters to integers
-        # Add more characters based on your actual level files
-        chars = ['-', '#', 'B', 'p', 'g', 'M', '?', '!', 'E', 'G', 'k', 'r', 'y', 'Y', 'X', 'S', '%', '|', '*']
+        # Create mapping from characters to integers based on actual level files
+        chars = [
+            '-',  # Empty space
+            '#',  # Ground
+            'B',  # Brick block
+            'P',  # Pipe body (upper)
+            'p',  # Pipe body (lower)
+            'g',  # Enemy
+            'M',  # Lucky block
+            '?',  # Lucky block
+            '[',  # Pipe entrance (left)
+            ']',  # Pipe entrance (right)
+            'k',  # Enemy
+            'O',  # Coin brick
+            '*',  # Lucky block
+            '|',  # End level pole
+            '+',  # Lucky block
+            'V',  # Enemy
+            'h',  # Enemy
+            'c',  # Cannon base
+            'C',  # Cannon head
+            'K',  # Enemy
+            'y',  # Spring base
+            'Y',  # Spring platform
+            'o',  # Coin
+            't',  # Enemy
+            'l'   # Enemy
+        ]
         char_to_int = {char: i for i, char in enumerate(chars)}
         return char_to_int
     
@@ -122,7 +147,7 @@ def collate_levels(batch):
 
 # Step 2: Define the Autoencoder Model (Discrete outputs for Mario levels)
 class MarioAutoencoder(nn.Module):
-    def __init__(self, input_channels=1, num_classes=19):  # 19 different Mario tile types
+    def __init__(self, input_channels=1, num_classes=25):  # 25 different Mario tile types
         super(MarioAutoencoder, self).__init__()
         
         self.num_classes = num_classes
@@ -176,7 +201,8 @@ class MarioAutoencoder(nn.Module):
         with torch.no_grad():
             logits = self.forward(x)
             # Get the most probable tile for each position
-            discrete_output = torch.argmax(logits, dim=1, keepdim=True).float()
+            # Return as integer tensor to preserve exact indices
+            discrete_output = torch.argmax(logits, dim=1, keepdim=True)
             return discrete_output
 
 # Step 3: Training Function (Updated for classification)
@@ -247,9 +273,44 @@ def generate_level(model, reference_level, device):
         generated = model(reference_tensor)
         return generated.cpu().squeeze().numpy()
 
-# Step 5: Visualization (Updated for discrete outputs)
+# Step 5: Visualization (Updated for Super Mario Bros colors)
 def visualize_levels(original, reconstructed, dataset=None, generated=None):
-    """Visualize original and reconstructed levels with proper character mapping"""
+    """Visualize original and reconstructed levels with Super Mario Bros style colors"""
+    
+    def create_mario_colormap():
+        # Create a custom colormap for Super Mario Bros style
+        colors = {
+            '-': '#87CEEB',  # Sky blue for empty space
+            '#': '#945200',  # Brown for ground blocks
+            'B': '#FF9C00',  # Orange for brick blocks
+            'P': '#00B800',  # Green for pipe body (upper)
+            'p': '#00B800',  # Green for pipe body (lower)
+            'g': '#FF0000',  # Red for enemies
+            'M': '#FFD800',  # Yellow for lucky blocks
+            '?': '#FFD800',  # Yellow for lucky blocks
+            '[': '#00B800',  # Green for pipe entrance
+            ']': '#00B800',  # Green for pipe entrance
+            'k': '#FF0000',  # Red for enemies
+            'O': '#945200',  # Light orange for coin blocks
+            '*': '#FFD800',  # Yellow for lucky blocks
+            '|': '#C0C0C0',  # Silver for end level pole
+            '+': '#FFD800',  # Yellow for lucky blocks
+            'V': '#FF0000',  # Red for enemies
+            'h': '#FF0000',  # Red for enemies
+            'c': '#808080',  # Gray for cannon base
+            'C': '#808080',  # Gray for cannon head
+            'K': '#FF0000',  # Red for enemies
+            'y': '#C0C0C0',  # Silver for spring base
+            'Y': '#C0C0C0',  # Silver for spring platform
+            'o': '#FFD800',  # Yellow for coins
+            't': '#FF0000',  # Red for enemies
+            'l': '#FF0000'   # Red for enemies
+        }
+        # Convert hex colors to RGB arrays
+        color_list = [colors[dataset.int_to_char[i]] if i in dataset.int_to_char else '#87CEEB' 
+                     for i in range(len(dataset.int_to_char))]
+        from matplotlib.colors import ListedColormap
+        return ListedColormap(color_list)
     
     # Convert reconstructed logits/indices back to character display
     if dataset is not None:
@@ -274,19 +335,22 @@ def visualize_levels(original, reconstructed, dataset=None, generated=None):
             print("\nGenerated Level:")
             print(array_to_text(generated))
     
+    # Create Mario-style colormap
+    mario_cmap = create_mario_colormap()
+    
     # Visual plot
     fig, axes = plt.subplots(1, 3 if generated is not None else 2, figsize=(20, 6))
     
-    axes[0].imshow(original, cmap='tab20', aspect='auto')
+    axes[0].imshow(original, cmap=mario_cmap, aspect='auto')
     axes[0].set_title('Original Level')
     axes[0].axis('off')
     
-    axes[1].imshow(reconstructed, cmap='tab20', aspect='auto')
+    axes[1].imshow(reconstructed, cmap=mario_cmap, aspect='auto')
     axes[1].set_title('Reconstructed Level')
     axes[1].axis('off')
     
     if generated is not None:
-        axes[2].imshow(generated, cmap='tab20', aspect='auto')
+        axes[2].imshow(generated, cmap=mario_cmap, aspect='auto')
         axes[2].set_title('Generated Level')
         axes[2].axis('off')
     
@@ -353,8 +417,34 @@ def main():
     original = sample_target[0].cpu().numpy()
     reconstructed = reconstructed_discrete[0].cpu().squeeze().numpy()
     
-    # Visualize results with character mapping
+    # Debug: Print unique values to check mapping
+    print("\nUnique values in original:", np.unique(original))
+    print("Unique values in reconstruction:", np.unique(reconstructed))
+    print("Mapping reference:")
+    for i, char in dataset.int_to_char.items():
+        print(f"{i}: '{char}'")
+    
+    # Convert to text format and save to file
+    original_text = convert_level_to_text(original, dataset.int_to_char)
+    reconstructed_text = convert_level_to_text(reconstructed, dataset.int_to_char)
+    
+    # Save to files
+    with open('generated_level.txt', 'w') as f:
+        for row in reconstructed_text:
+            f.write(row + '\n')
+    print("Generated level saved to 'generated_level.txt'")
+    
+    # Visual representation using matplotlib
     visualize_levels(original, reconstructed, dataset)
+    
+    # Also print text representation
+    print("\nOriginal level:")
+    for row in original_text:
+        print(row)
+    
+    print("\nGenerated level:")
+    for row in reconstructed_text:
+        print(row)
     
     # Plot training loss
     plt.figure(figsize=(10, 6))
@@ -364,8 +454,6 @@ def main():
     plt.ylabel('CrossEntropy Loss')
     plt.show()
 
-if __name__ == "__main__":
-    main()
 
 # Additional Helper Functions
 
@@ -378,22 +466,29 @@ def load_pretrained_model(model_path):
 
 def convert_level_to_text(level_array, int_to_char=None):
     """Convert integer array back to readable text format"""
+    # Always use the provided int_to_char mapping if available
     if int_to_char is None:
-        # Default mapping (reverse of what we used earlier)
-        chars = ['-', '#', 'B', 'p', 'g', 'M', '?', '!', 'E', 'G', 'k', 'r', 'y', 'Y', 'X', 'S', '%', '|', '*']
-        int_to_char = {i: char for i, char in enumerate(chars)}
+        raise ValueError("int_to_char mapping must be provided")
     
     text_level = []
     for row in level_array:
         text_row = ""
         for val in row:
-            # Denormalize from 0-1 range back to character indices
-            char_idx = int(round(val * len(int_to_char)))
+            # If the input is already discrete (integers)
+            if isinstance(val, (int, np.integer)):
+                char_idx = val
+            else:
+                # Denormalize from 0-1 range back to character indices
+                char_idx = int(round(val * len(int_to_char)))
             char_idx = max(0, min(char_idx, len(int_to_char)-1))  # Clamp to valid range
             text_row += int_to_char.get(char_idx, '-')
         text_level.append(text_row)
     
     return text_level
+
+
+if __name__ == "__main__":
+    main()
 
 # Usage example for generating new levels:
 """
