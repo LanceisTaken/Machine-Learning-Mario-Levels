@@ -17,3 +17,23 @@ c- Canon Base
 C- Canon Head
 t- Some black enemy
 l - enemy in the cloud
+
+# - Ground
+? - Lucky Blocks
+g - Enemy
+M - Lucky Blocks
+[] - Pipe Entrance
+pP - Pipe Body
++ - Lucky Block
+O - Coin Brick
+* - Lucky Block
+k - Enemy
+V - Enemy
+K - Enemy
+y - Spring Base
+Y - Spring Platform
+o - Coin
+c- Canon Base
+C- Canon Head
+t- Enemy
+l - Enemy
