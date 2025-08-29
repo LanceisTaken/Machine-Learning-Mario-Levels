@@ -1,510 +1,281 @@
-# Mario Level Generation with Autoencoder - Complete Beginner Guide
+import argparse
+import json
+import math
+import os
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
+from torch import nn
 from torch.utils.data import Dataset, DataLoader
-import numpy as np
-import matplotlib.pyplot as plt
-import glob
-from sklearn.model_selection import train_test_split
 
-# Step 1: Data Preprocessing
-class MarioLevelDataset(Dataset):
-    def __init__(self, level_files):
-        self.levels = []
-        self.char_to_int = self._create_mapping()
-        self.int_to_char = {v: k for k, v in self.char_to_int.items()}  # Reverse mapping
-        self.original_shapes = []
-        
-        # Load and process your level files - keep original sizes
-        for level_file in level_files:
-            level = self._load_level(level_file)
-            self.levels.append(level)
-            self.original_shapes.append(level.shape)
-        
-        # Find max dimensions across all levels for padding reference
-        max_height = max(shape[0] for shape in self.original_shapes)
-        max_width = max(shape[1] for shape in self.original_shapes)
-        
-        print(f"Loaded {len(self.levels)} levels")
-        print(f"Level dimensions range: {min(self.original_shapes)} to {max(self.original_shapes)}")
-        print(f"Max dimensions: [{max_height}, {max_width}]")
-        print(f"Character mapping: {self.char_to_int}")
-    
-    def _create_mapping(self):
-        # Create mapping from characters to integers based on actual level files
-        chars = [
-            '-',  # Empty space
-            '#',  # Ground
-            'B',  # Brick block
-            'P',  # Pipe body (upper)
-            'p',  # Pipe body (lower)
-            'g',  # Enemy
-            'M',  # Lucky block
-            '?',  # Lucky block
-            '[',  # Pipe entrance (left)
-            ']',  # Pipe entrance (right)
-            'k',  # Enemy
-            'O',  # Coin brick
-            '*',  # Lucky block
-            '|',  # End level pole
-            '+',  # Lucky block
-            'V',  # Enemy
-            'h',  # Enemy
-            'c',  # Cannon base
-            'C',  # Cannon head
-            'K',  # Enemy
-            'y',  # Spring base
-            'Y',  # Spring platform
-            'o',  # Coin
-            't',  # Enemy
-            'l'   # Enemy
-        ]
-        char_to_int = {char: i for i, char in enumerate(chars)}
-        return char_to_int
-    
-    def _load_level(self, level_file):
-        # Load your actual level files without any resizing
-        with open(level_file, 'r') as f:
-            lines = f.readlines()
-        
-        # Convert to integer representation
-        level_grid = []
-        for line in lines:
-            # Remove line numbers and extra characters if present
-            clean_line = line.strip()
-            if clean_line.startswith(tuple('0123456789')):
-                # Remove line numbers (e.g., "1   ----------" becomes "----------")
-                parts = clean_line.split(None, 1)
-                if len(parts) > 1:
-                    clean_line = parts[1]
-                else:
-                    clean_line = ""
-            
-            row = []
-            for char in clean_line:
-                if char in self.char_to_int:
-                    row.append(self.char_to_int[char])
-                else:
-                    row.append(self.char_to_int['-'])  # Default to empty space
-            
-            if row:  # Only add non-empty rows
-                level_grid.append(row)
-        
-        return np.array(level_grid, dtype=np.int64)  # Use int64 for CrossEntropyLoss
-    
-    def __len__(self):
-        return len(self.levels)
-    
-    def __getitem__(self, idx):
-        level = self.levels[idx]
-        
-        # For input: normalize to 0-1 range for the encoder
-        level_input = torch.FloatTensor(level / len(self.char_to_int)).unsqueeze(0)
-        
-        # For target: keep as integer indices for CrossEntropyLoss
-        level_target = torch.LongTensor(level)
-        
-        # Return input, target, and original shape information
-        return level_input, level_target, level.shape
 
-# Custom collate function to handle different sized levels (updated for classification)
-def collate_levels(batch):
-    """Custom collate function that pads levels to the same size within each batch"""
-    inputs, targets, shapes = zip(*batch)
-    
-    # Find max dimensions in this batch
-    max_height = max(shape[0] for shape in shapes)
-    max_width = max(shape[1] for shape in shapes)
-    
-    # Pad all levels in the batch to the same size
-    padded_inputs = []
-    padded_targets = []
-    
-    for inp, tgt in zip(inputs, targets):
-        # Current size
-        _, curr_h, curr_w = inp.shape
-        tgt_h, tgt_w = tgt.shape
-        
-        # Pad to max size
-        pad_h = max_height - curr_h
-        pad_w = max_width - curr_w
-        
-        # Pad inputs with zeros (normalized empty space)
-        padded_inp = torch.nn.functional.pad(inp, (0, pad_w, 0, pad_h), value=0)
-        
-        # Pad targets with 0 (empty space class index)
-        padded_tgt = torch.nn.functional.pad(tgt, (0, pad_w, 0, pad_h), value=0)
-        
-        padded_inputs.append(padded_inp)
-        padded_targets.append(padded_tgt)
-    
-    # Stack into batch tensors
-    batch_inputs = torch.stack(padded_inputs)
-    batch_targets = torch.stack(padded_targets)
-    
-    return batch_inputs, batch_targets
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-# Step 2: Define the Autoencoder Model (Discrete outputs for Mario levels)
-class MarioAutoencoder(nn.Module):
-    def __init__(self, input_channels=1, num_classes=25):  # 25 different Mario tile types
-        super(MarioAutoencoder, self).__init__()
-        
-        self.num_classes = num_classes
-        
-        # Encoder - compresses the level into a smaller representation
-        self.encoder = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveMaxPool2d((7, 50)),  # Adaptive pooling to fixed size
-            
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveMaxPool2d((4, 25)),  # Further compression
-            
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-        )
-        
-        # Decoder - reconstructs the level from compressed representation
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(64, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            
-            # Output logits for each tile class (not probabilities yet)
-            nn.ConvTranspose2d(32, num_classes, kernel_size=3, padding=1),
-            # No activation here - we'll use CrossEntropyLoss
-        )
-    
-    def forward(self, x):
-        batch_size, channels, height, width = x.shape
-        
-        # Pass through encoder
-        encoded = self.encoder(x)
-        
-        # Pass through decoder to get logits
-        decoded_logits = self.decoder(encoded)
-        
-        # Resize back to original input size
-        final_logits = nn.functional.interpolate(decoded_logits, 
-                                                size=(height, width), 
-                                                mode='bilinear', 
-                                                align_corners=False)
-        
-        return final_logits
-    
-    def generate_discrete_output(self, x):
-        """Generate discrete tile indices (for visualization/generation)"""
-        with torch.no_grad():
-            logits = self.forward(x)
-            # Get the most probable tile for each position
-            # Return as integer tensor to preserve exact indices
-            discrete_output = torch.argmax(logits, dim=1, keepdim=True)
-            return discrete_output
 
-# Step 3: Training Function (Updated for classification)
-def train_model(model, train_loader, num_epochs=50, learning_rate=0.001):
-    # Set device (GPU if available, otherwise CPU)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    
-    # Define loss function and optimizer for classification
-    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore padding if needed
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
-    
-    # Training loop
-    train_losses = []
-    
-    for epoch in range(num_epochs):
+def read_levels(levels_dir: str) -> str:
+    paths = sorted(Path(levels_dir).glob("*.txt"))
+    if not paths:
+        raise FileNotFoundError(f"No .txt files found in {levels_dir}")
+    texts: List[str] = []
+    for p in paths:
+        with open(p, "r", encoding="utf-8") as f:
+            texts.append(f.read().strip())
+    # Join levels with a separator newline block to avoid bleeding
+    return "\n\n".join(texts) + "\n"
+
+
+def build_vocab(text: str) -> Tuple[Dict[str, int], Dict[int, str]]:
+    chars = sorted(list(set(text)))
+    stoi = {ch: i for i, ch in enumerate(chars)}
+    itos = {i: ch for ch, i in stoi.items()}
+    return stoi, itos
+
+
+def encode(text: str, stoi: Dict[str, int]) -> torch.Tensor:
+    return torch.tensor([stoi[c] for c in text], dtype=torch.long)
+
+
+def decode(tokens: List[int], itos: Dict[int, str]) -> str:
+    return "".join(itos[i] for i in tokens)
+
+
+class CharSequenceDataset(Dataset):
+    def __init__(self, data: torch.Tensor, sequence_length: int):
+        super().__init__()
+        self.data = data
+        self.sequence_length = sequence_length
+
+    def __len__(self) -> int:
+        return max(0, self.data.size(0) - self.sequence_length)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        chunk = self.data[idx : idx + self.sequence_length + 1]
+        x = chunk[:-1]
+        y = chunk[1:]
+        return x, y
+
+
+class CharLSTM(nn.Module):
+    def __init__(self, vocab_size: int, embedding_dim: int, hidden_dim: int, num_layers: int, dropout: float):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers=num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
+        self.proj = nn.Linear(hidden_dim, vocab_size)
+
+    def forward(self, x: torch.Tensor, hidden: Tuple[torch.Tensor, torch.Tensor] = None) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        emb = self.embedding(x)
+        out, hidden = self.lstm(emb, hidden)
+        logits = self.proj(out)
+        return logits, hidden
+
+
+@dataclass
+class TrainConfig:
+    levels_dir: str
+    output_dir: str
+    seq_len: int = 128
+    batch_size: int = 64
+    embedding_dim: int = 128
+    hidden_dim: int = 256
+    num_layers: int = 2
+    dropout: float = 0.1
+    lr: float = 3e-3
+    max_epochs: int = 20
+    weight_decay: float = 0.0
+    grad_clip: float = 1.0
+    seed: int = 42
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def train_model(cfg: TrainConfig) -> None:
+    set_seed(cfg.seed)
+    os.makedirs(cfg.output_dir, exist_ok=True)
+
+    text = read_levels(cfg.levels_dir)
+    stoi, itos = build_vocab(text)
+    encoded = encode(text, stoi)
+
+    n_total = encoded.size(0)
+    n_train = int(n_total * 0.95)
+    train_data = encoded[:n_train]
+    val_data = encoded[n_train:]
+
+    train_ds = CharSequenceDataset(train_data, cfg.seq_len)
+    val_ds = CharSequenceDataset(val_data, cfg.seq_len)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, drop_last=False)
+
+    model = CharLSTM(vocab_size=len(stoi), embedding_dim=cfg.embedding_dim, hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, dropout=cfg.dropout).to(cfg.device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    criterion = nn.CrossEntropyLoss()
+
+    best_val = math.inf
+    best_path = os.path.join(cfg.output_dir, "mario_lstm.pt")
+
+    for epoch in range(1, cfg.max_epochs + 1):
         model.train()
-        epoch_loss = 0.0
-        correct_predictions = 0
-        total_predictions = 0
-        
-        for batch_idx, (data, target) in enumerate(train_loader):
-            data, target = data.to(device), target.to(device)
-            
-            # Clear gradients
-            optimizer.zero_grad()
-            
-            # Forward pass - model outputs logits for each class
-            output_logits = model(data)
-            
-            # Reshape for CrossEntropyLoss: (batch, classes, height, width) -> (batch*height*width, classes)
-            batch_size, num_classes, height, width = output_logits.shape
-            output_logits_reshaped = output_logits.permute(0, 2, 3, 1).contiguous().view(-1, num_classes)
-            target_reshaped = target.view(-1)
-            
-            # Calculate loss
-            loss = criterion(output_logits_reshaped, target_reshaped)
-            
-            # Backward pass
+        total_loss = 0.0
+        for x, y in train_loader:
+            x = x.to(cfg.device)
+            y = y.to(cfg.device)
+            optimizer.zero_grad(set_to_none=True)
+            logits, _ = model(x)
+            loss = criterion(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
             loss.backward()
+            if cfg.grad_clip is not None and cfg.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
-            
-            # Calculate accuracy
-            _, predicted = torch.max(output_logits_reshaped, 1)
-            correct_predictions += (predicted == target_reshaped).sum().item()
-            total_predictions += target_reshaped.size(0)
-            
-            epoch_loss += loss.item()
-        
-        avg_loss = epoch_loss / len(train_loader)
-        accuracy = 100. * correct_predictions / total_predictions
-        train_losses.append(avg_loss)
-        
-        # Update learning rate
-        scheduler.step(avg_loss)
-        
-        if epoch % 10 == 0:
-            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
-    
-    return train_losses
+            total_loss += loss.item()
 
-# Step 4: Generate New Levels
-def generate_level(model, reference_level, device):
+        avg_train = total_loss / max(1, len(train_loader))
+
+        model.eval()
+        with torch.no_grad():
+            val_loss = 0.0
+            for x, y in val_loader:
+                x = x.to(cfg.device)
+                y = y.to(cfg.device)
+                logits, _ = model(x)
+                loss = criterion(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+                val_loss += loss.item()
+            avg_val = val_loss / max(1, len(val_loader))
+
+        print(f"Epoch {epoch:02d}: train_loss={avg_train:.4f} val_loss={avg_val:.4f}")
+
+        if avg_val < best_val:
+            best_val = avg_val
+            torch.save({
+                "model_state": model.state_dict(),
+                "config": {
+                    "vocab_size": len(stoi),
+                    "embedding_dim": cfg.embedding_dim,
+                    "hidden_dim": cfg.hidden_dim,
+                    "num_layers": cfg.num_layers,
+                    "dropout": cfg.dropout,
+                },
+            }, best_path)
+
+    with open(os.path.join(cfg.output_dir, "vocab.json"), "w", encoding="utf-8") as f:
+        json.dump({"stoi": stoi, "itos": {str(k): v for k, v in itos.items()}}, f, ensure_ascii=False, indent=2)
+
+
+@torch.inference_mode()
+def generate(
+    model_path: str,
+    vocab_path: str,
+    length: int = 1000,
+    temperature: float = 1.0,
+    seed_text: str = "",
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+) -> str:
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        vocab = json.load(f)
+    stoi: Dict[str, int] = vocab["stoi"]
+    itos: Dict[int, str] = {int(k): v for k, v in vocab["itos"].items()}
+
+    ckpt = torch.load(model_path, map_location=device)
+    cfg = ckpt["config"]
+    model = CharLSTM(
+        vocab_size=len(stoi),
+        embedding_dim=cfg["embedding_dim"],
+        hidden_dim=cfg["hidden_dim"],
+        num_layers=cfg["num_layers"],
+        dropout=cfg["dropout"],
+    ).to(device)
+    model.load_state_dict(ckpt["model_state"])
     model.eval()
-    with torch.no_grad():
-        reference_tensor = torch.FloatTensor(reference_level).unsqueeze(0).unsqueeze(0).to(device)
-        generated = model(reference_tensor)
-        return generated.cpu().squeeze().numpy()
 
-# Step 5: Visualization (Updated for Super Mario Bros colors)
-def visualize_levels(original, reconstructed, dataset=None, generated=None):
-    """Visualize original and reconstructed levels with Super Mario Bros style colors"""
-    
-    def create_mario_colormap():
-        # Create a custom colormap for Super Mario Bros style
-        colors = {
-            '-': '#87CEEB',  # Sky blue for empty space
-            '#': '#945200',  # Brown for ground blocks
-            'B': '#FF9C00',  # Orange for brick blocks
-            'P': '#00B800',  # Green for pipe body (upper)
-            'p': '#00B800',  # Green for pipe body (lower)
-            'g': '#FF0000',  # Red for enemies
-            'M': '#FFD800',  # Yellow for lucky blocks
-            '?': '#FFD800',  # Yellow for lucky blocks
-            '[': '#00B800',  # Green for pipe entrance
-            ']': '#00B800',  # Green for pipe entrance
-            'k': '#FF0000',  # Red for enemies
-            'O': '#945200',  # Light orange for coin blocks
-            '*': '#FFD800',  # Yellow for lucky blocks
-            '|': '#C0C0C0',  # Silver for end level pole
-            '+': '#FFD800',  # Yellow for lucky blocks
-            'V': '#FF0000',  # Red for enemies
-            'h': '#FF0000',  # Red for enemies
-            'c': '#808080',  # Gray for cannon base
-            'C': '#808080',  # Gray for cannon head
-            'K': '#FF0000',  # Red for enemies
-            'y': '#C0C0C0',  # Silver for spring base
-            'Y': '#C0C0C0',  # Silver for spring platform
-            'o': '#FFD800',  # Yellow for coins
-            't': '#FF0000',  # Red for enemies
-            'l': '#FF0000'   # Red for enemies
-        }
-        # Convert hex colors to RGB arrays
-        color_list = [colors[dataset.int_to_char[i]] if i in dataset.int_to_char else '#87CEEB' 
-                     for i in range(len(dataset.int_to_char))]
-        from matplotlib.colors import ListedColormap
-        return ListedColormap(color_list)
-    
-    # Convert reconstructed logits/indices back to character display
-    if dataset is not None:
-        int_to_char = dataset.int_to_char
-        
-        # Create text representation for better visualization
-        def array_to_text(arr):
-            if len(arr.shape) == 2:  # 2D array
-                text_lines = []
-                for row in arr:
-                    line = ''.join([int_to_char.get(int(val), '-') for val in row])
-                    text_lines.append(line)
-                return '\n'.join(text_lines)
-            return str(arr)
-        
-        print("Original Level:")
-        print(array_to_text(original))
-        print("\nReconstructed Level:")
-        print(array_to_text(reconstructed))
-        
-        if generated is not None:
-            print("\nGenerated Level:")
-            print(array_to_text(generated))
-    
-    # Create Mario-style colormap
-    mario_cmap = create_mario_colormap()
-    
-    # Visual plot
-    fig, axes = plt.subplots(1, 3 if generated is not None else 2, figsize=(20, 6))
-    
-    axes[0].imshow(original, cmap=mario_cmap, aspect='auto')
-    axes[0].set_title('Original Level')
-    axes[0].axis('off')
-    
-    axes[1].imshow(reconstructed, cmap=mario_cmap, aspect='auto')
-    axes[1].set_title('Reconstructed Level')
-    axes[1].axis('off')
-    
-    if generated is not None:
-        axes[2].imshow(generated, cmap=mario_cmap, aspect='auto')
-        axes[2].set_title('Generated Level')
-        axes[2].axis('off')
-    
-    plt.tight_layout()
-    plt.show()
+    if seed_text:
+        context_tokens = [stoi.get(c, 0) for c in seed_text]
+    else:
+        # start with a newline as neutral token if exists
+        start_char = "\n" if "\n" in stoi else next(iter(stoi.keys()))
+        context_tokens = [stoi[start_char]]
 
-# Step 6: Main Training Script
-def main():
-    # 1. Prepare your data
-    # Replace this with paths to your actual level files
-    level_files = glob.glob(r"C:\Users\User\Documents\GitHub\Machine-Learning---Mario-Levels\Levels\*.txt")  # Your level files
-    
-    # You can also automatically find all .txt files in a directory:
-    # import glob
-    # level_files = glob.glob("path/to/your/levels/*.txt")
-    
-    # Create dataset and split into train/validation
-    try:
-        # No resizing - keep original level dimensions
-        dataset = MarioLevelDataset(level_files)
-        train_size = int(0.8 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-        
-        # Create data loaders with custom collate function
-        train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, collate_fn=collate_levels)
-        val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, collate_fn=collate_levels)
-        
-        print(f"Dataset loaded: {len(dataset)} levels")
-        print(f"Training samples: {len(train_dataset)}, Validation samples: {len(val_dataset)}")
-        
-    except FileNotFoundError as e:
-        print(f"Level files not found: {e}")
-        print("Please update the file paths in level_files list.")
-        return
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        return
-    
-    # 2. Create and train the model  
-    model = MarioAutoencoder()  # Now adaptive to any input size
-    print("Model created:", model)
-    
-    # 3. Train the model
-    print("Starting training...")
-    train_losses = train_model(model, train_loader, num_epochs=100, learning_rate=0.001)
-    
-    # 4. Save the trained model
-    torch.save(model.state_dict(), 'mario_autoencoder.pth')
-    print("Model saved as 'mario_autoencoder.pth'")
-    
-    # 5. Test the model (generate a level) - Updated for discrete output
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.eval()
-    
-    # Get a sample from validation set
-    sample_data, sample_target = next(iter(val_loader))
-    
-    with torch.no_grad():
-        # Get discrete reconstruction
-        reconstructed_discrete = model.generate_discrete_output(sample_data.to(device))
-    
-    # Convert to numpy for visualization
-    original = sample_target[0].cpu().numpy()
-    reconstructed = reconstructed_discrete[0].cpu().squeeze().numpy()
-    
-    # Debug: Print unique values to check mapping
-    print("\nUnique values in original:", np.unique(original))
-    print("Unique values in reconstruction:", np.unique(reconstructed))
-    print("Mapping reference:")
-    for i, char in dataset.int_to_char.items():
-        print(f"{i}: '{char}'")
-    
-    # Convert to text format and save to file
-    original_text = convert_level_to_text(original, dataset.int_to_char)
-    reconstructed_text = convert_level_to_text(reconstructed, dataset.int_to_char)
-    
-    # Save to files
-    with open('generated_level.txt', 'w') as f:
-        for row in reconstructed_text:
-            f.write(row + '\n')
-    print("Generated level saved to 'generated_level.txt'")
-    
-    # Visual representation using matplotlib
-    visualize_levels(original, reconstructed, dataset)
-    
-    # Also print text representation
-    print("\nOriginal level:")
-    for row in original_text:
-        print(row)
-    
-    print("\nGenerated level:")
-    for row in reconstructed_text:
-        print(row)
-    
-    # Plot training loss
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_losses)
-    plt.title('Training Loss Over Time')
-    plt.xlabel('Epoch')
-    plt.ylabel('CrossEntropy Loss')
-    plt.show()
+    input_ids = torch.tensor([context_tokens], dtype=torch.long, device=device)
+    hidden = None
+
+    # Feed the seed text to warm up hidden state
+    logits, hidden = model(input_ids, hidden)
+    next_id = input_ids[0, -1]
+    generated: List[int] = list(context_tokens)
+
+    for _ in range(max(0, length)):
+        inp = next_id.view(1, 1)
+        logits, hidden = model(inp, hidden)
+        logits = logits[:, -1, :] / max(1e-6, temperature)
+        probs = torch.softmax(logits, dim=-1)
+        next_id = torch.multinomial(probs, num_samples=1).squeeze(0).squeeze(0)
+        generated.append(int(next_id.item()))
+
+    return decode(generated, itos)
 
 
-# Additional Helper Functions
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train and use an LSTM to generate Mario levels")
+    sub = parser.add_subparsers(dest="command", required=True)
 
-def load_pretrained_model(model_path):
-    """Load a previously trained model"""
-    model = MarioAutoencoder()
-    model.load_state_dict(torch.load(model_path))
-    model.eval()
-    return model
+    p_train = sub.add_parser("train", help="Train the model")
+    p_train.add_argument("--levels_dir", default="Levels", type=str, help="Directory containing .txt levels")
+    p_train.add_argument("--output_dir", default=".", type=str, help="Where to save model and vocab")
+    p_train.add_argument("--seq_len", type=int, default=128)
+    p_train.add_argument("--batch_size", type=int, default=64)
+    p_train.add_argument("--embedding_dim", type=int, default=128)
+    p_train.add_argument("--hidden_dim", type=int, default=256)
+    p_train.add_argument("--num_layers", type=int, default=2)
+    p_train.add_argument("--dropout", type=float, default=0.1)
+    p_train.add_argument("--lr", type=float, default=3e-3)
+    p_train.add_argument("--max_epochs", type=int, default=20)
+    p_train.add_argument("--weight_decay", type=float, default=0.0)
+    p_train.add_argument("--grad_clip", type=float, default=1.0)
+    p_train.add_argument("--seed", type=int, default=42)
 
-def convert_level_to_text(level_array, int_to_char=None):
-    """Convert integer array back to readable text format"""
-    # Always use the provided int_to_char mapping if available
-    if int_to_char is None:
-        raise ValueError("int_to_char mapping must be provided")
-    
-    text_level = []
-    for row in level_array:
-        text_row = ""
-        for val in row:
-            # If the input is already discrete (integers)
-            if isinstance(val, (int, np.integer)):
-                char_idx = val
-            else:
-                # Denormalize from 0-1 range back to character indices
-                char_idx = int(round(val * len(int_to_char)))
-            char_idx = max(0, min(char_idx, len(int_to_char)-1))  # Clamp to valid range
-            text_row += int_to_char.get(char_idx, '-')
-        text_level.append(text_row)
-    
-    return text_level
+    p_gen = sub.add_parser("generate", help="Generate level text from a trained model")
+    p_gen.add_argument("--model_path", default="mario_lstm.pt", type=str)
+    p_gen.add_argument("--vocab_path", default="vocab.json", type=str)
+    p_gen.add_argument("--length", type=int, default=2000)
+    p_gen.add_argument("--temperature", type=float, default=1.0)
+    p_gen.add_argument("--seed_text", type=str, default="")
+    p_gen.add_argument("--out", type=str, default="generated_level.txt")
+
+    args = parser.parse_args()
+
+    if args.command == "train":
+        cfg = TrainConfig(
+            levels_dir=args.levels_dir,
+            output_dir=args.output_dir,
+            seq_len=args.seq_len,
+            batch_size=args.batch_size,
+            embedding_dim=args.embedding_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            dropout=args.dropout,
+            lr=args.lr,
+            max_epochs=args.max_epochs,
+            weight_decay=args.weight_decay,
+            grad_clip=args.grad_clip,
+            seed=args.seed,
+        )
+        train_model(cfg)
+    elif args.command == "generate":
+        text = generate(
+            model_path=args.model_path,
+            vocab_path=args.vocab_path,
+            length=args.length,
+            temperature=args.temperature,
+            seed_text=args.seed_text,
+        )
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"Saved generated text to {args.out}")
 
 
 if __name__ == "__main__":
     main()
 
-# Usage example for generating new levels:
-"""
-# After training, load your model and generate new levels:
-
-model = load_pretrained_model('mario_autoencoder.pth')
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# Load a reference level
-reference_level = np.array([...])  # Your level data
-
-# Generate new level
-new_level = generate_level(model, reference_level, device)
-
-# Convert back to text format
-text_level = convert_level_to_text(new_level)
-for row in text_level:
-    print(row)
-"""
