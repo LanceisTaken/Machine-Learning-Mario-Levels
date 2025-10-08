@@ -408,7 +408,16 @@ MonoBehaviour:
   - '|'
   wrapWidth: 60
   targetHeight: 14
+  enforceGroundRow: 0
+  enforceRules: 0
+  solidGround: 0
+  gapRate: 0
+  gapMin: 2
+  gapMax: 6
+  postprocessSeed: 12345
   levelGenerator: {fileID: 1457359768}
+  saveOnGenerate: 1
+  savePath: C:\\Users\\User\\Documents\\GitHub\\Machine-Learning---Mario-Levels\\generated_level_unity.txt
 --- !u!4 &1457359770
 Transform:
   m_ObjectHideFlags: 0
