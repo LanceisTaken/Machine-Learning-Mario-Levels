@@ -72,7 +72,23 @@ Add bottom gaps to the ground (danger pits):
 python MarioTrainer.py generate --length 1680 --wrap_width 120 --target_height 14 --enforce_ground --enforce_rules --gap_rate 0.08 --gap_min 2 --gap_max 6 --render_png --png_path generated_level.png
 ```
 
+Ensure gaps are empty all the way down (no holes inside ground):
+
+```bash
+python MarioTrainer.py generate --length 1680 --wrap_width 120 --target_height 14 --enforce_ground --enforce_rules --gap_rate 0.08 --gap_min 2 --gap_max 6 --solid_ground --render_png --png_path generated_level.png
+```
+
 Notes:
 - Characters are modeled at the character level with one exception: `pP` is treated as a single compound token internally and expanded back on output. This helps keep pipes coherent.
 - The script concatenates all files in `Levels/` and splits 95/5 into train/val.
 - Tune `--temperature` for more or less randomness.
+
+## Export to ONNX (for Unity inference)
+
+Export your trained LSTM to ONNX with hidden state inputs/outputs:
+
+```bash
+python export_onnx.py --model_path mario_lstm.pt --out mario_lstm.onnx --opset 14
+```
+
+The ONNX graph expects inputs: `x` [batch=1,time=1], `h0` [num_layers,1,hidden], `c0` [num_layers,1,hidden] and returns `logits`, `hn`, `cn`.

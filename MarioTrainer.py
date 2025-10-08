@@ -528,6 +528,41 @@ def carve_ground_gaps(
     return "\n".join("".join(row) for row in grid)
 
 
+def enforce_solid_ground(
+    text: str,
+    ground_char: str = "#",
+    sky_char: str = "-",
+) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines:
+        return text
+    h = len(lines)
+    w = max(len(l) for l in lines)
+    grid = [list(l + (sky_char * (w - len(l)))) for l in lines]
+
+    for x in range(w):
+        ground_rows = [y for y in range(h) if grid[y][x] == ground_char]
+        if not ground_rows:
+            continue
+        bottom_is_ground = grid[h - 1][x] == ground_char
+        if not bottom_is_ground:
+            # Clear floating ground in gap columns
+            for y in ground_rows:
+                grid[y][x] = sky_char
+            continue
+        top_ground = min(ground_rows)
+        # Fill any sky within the bottom-connected ground segment, but don't overwrite non-sky tokens
+        for y in range(h):
+            if y >= top_ground:
+                if grid[y][x] == sky_char:
+                    grid[y][x] = ground_char
+            else:
+                if grid[y][x] == ground_char:
+                    grid[y][x] = sky_char
+
+    return "\n".join("".join(row) for row in grid)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train and use an LSTM to generate Mario levels")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -567,6 +602,7 @@ def main() -> None:
     p_gen.add_argument("--gap_rate", type=float, default=0.0, help="Probability to start a ground gap on bottom row (0 disables)")
     p_gen.add_argument("--gap_min", type=int, default=2, help="Minimum gap width in tiles")
     p_gen.add_argument("--gap_max", type=int, default=6, help="Maximum gap width in tiles")
+    p_gen.add_argument("--solid_ground", action="store_true", help="Make ground columns solid: no sky below any ground tile; gaps are empty down to bottom")
 
     args = parser.parse_args()
 
@@ -614,6 +650,8 @@ def main() -> None:
                 min_width=max(1, args.gap_min),
                 max_width=max(args.gap_min, args.gap_max),
             )
+        if getattr(args, "solid_ground", False):
+            text = enforce_solid_ground(text)
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(text)
         print(f"Saved generated text to {args.out}")
