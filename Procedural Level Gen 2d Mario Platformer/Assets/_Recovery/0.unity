@@ -375,8 +375,8 @@ MonoBehaviour:
   brickSprite: {fileID: -7839824748867068813, guid: fc584d329b77b9545b9c9c8bb829e553, type: 3}
   questionSprite: {fileID: 1437503401646794464, guid: fc584d329b77b9545b9c9c8bb829e553, type: 3}
   coinSprite: {fileID: 4121880872312635667, guid: ffc9f271fad56c243a45f100b9dc6778, type: 3}
-  pipeSprite: {fileID: 21300000, guid: 48fd9917466ade44fa9bfd8326fab049, type: 3}
-  cannonSprite: {fileID: 21300000, guid: 19602dbd991e72f4c8df688afa341f3d, type: 3}
+  pipeSprite: {fileID: -1443808521566509384, guid: e3ec232265f6ad147aa2aa71472516d9, type: 3}
+  cannonSprite: {fileID: 5023087293052794153, guid: c016f0eb0a188a14ab7f86d910097523, type: 3}
   springSprite: {fileID: 21300000, guid: 84b0d89aa2c8bfb4c8c1d378fa972fbd, type: 3}
   enemySprite: {fileID: -6367560908665664636, guid: 3750f45c844123341b9a777a96cb1eca, type: 3}
   otherSprite: {fileID: -6367560908665664636, guid: cd947491a13509945aa1b644f9db3ef2, type: 3}
@@ -406,7 +406,7 @@ MonoBehaviour:
   hashBias: 0
   bannedTokens:
   - '|'
-  wrapWidth: 60
+  wrapWidth: 120
   targetHeight: 14
   levelGenerator: {fileID: 1457359768}
 --- !u!4 &1457359770
@@ -436,8 +436,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ce4f5857161b7c941a38270520c19d9e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GenerateOnStart
-  generator: {fileID: 0}
-  length: 240
+  generator: {fileID: 1457359769}
+  length: 1680
   seedText: 
 --- !u!1660057539 &9223372036854775807
 SceneRoots:

@@ -59,10 +59,21 @@ public class BarracudaLstmGenerator : MonoBehaviour
 
     public void GenerateAndBuild(int length = 1680, string seedText = "")
     {
+        if (onnxModel == null)
+        {
+            Debug.LogError("BarracudaLstmGenerator: onnxModel is not assigned");
+            return;
+        }
+        if (itosText == null)
+        {
+            Debug.LogError("BarracudaLstmGenerator: itosText is not assigned");
+            return;
+        }
         var txt = Generate(length, seedText);
         // Expand compound token: § -> pP
         txt = txt.Replace("§", "pP");
         var lines = WrapToLines(txt, wrapWidth, targetHeight);
+        Debug.Log($"Generator: textLen={txt?.Length ?? 0}, lines={lines?.Length ?? 0}, width={(lines!=null && lines.Length>0 ? lines[0].Length : 0)}");
         if (levelGenerator != null)
         {
             levelGenerator.BuildLevel(lines);
@@ -216,6 +227,7 @@ public class BarracudaLstmGenerator : MonoBehaviour
             lines.Add(text.Substring(i, len));
             i += len;
         }
+        if (lines.Count == 0) lines.Add(new string('-', Math.Max(1, width)));
         if (height > 0)
         {
             if (lines.Count > height) lines = lines.GetRange(0, height);

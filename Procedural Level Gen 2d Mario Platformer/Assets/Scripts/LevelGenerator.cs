@@ -3,21 +3,22 @@ using UnityEngine;
 
 public class LevelGenerator : MonoBehaviour
 {
-    [Header("Tile Prefabs")]
-    public GameObject groundPrefab;   // '#'
-    public GameObject brickPrefab;    // 'B'
-    public GameObject questionPrefab; // '?'
-    public GameObject coinPrefab;     // 'o'
-    public GameObject pipePrefab;     // 'p' and 'P' (stacked vertically)
-    public GameObject cannonPrefab;   // 'c'
-    public GameObject springPrefab;   // 'y'/'Y'
-    public GameObject enemyPrefab;    // 'e','g','k','K','t','l','V','h'
-    public GameObject otherPrefab;    // fallback
+    [Header("Tile Sprites")]
+    public Sprite groundSprite;   // '#'
+    public Sprite brickSprite;    // 'B'
+    public Sprite questionSprite; // '?'
+    public Sprite coinSprite;     // 'o'
+    public Sprite pipeSprite;     // 'p' and 'P'
+    public Sprite cannonSprite;   // 'c'
+    public Sprite springSprite;   // 'y'/'Y'
+    public Sprite enemySprite;    // 'e','g','k','K','t','l','V','h'
+    public Sprite otherSprite;    // fallback
 
     [Header("Layout")] 
     public float tileSize = 1f;
     public Vector2 origin = Vector2.zero;
     public bool invertY = true; // text first line is top
+    public int sortingOrder = 0; // SpriteRenderer sorting order
 
     public void BuildLevel(string[] lines)
     {
@@ -29,6 +30,7 @@ public class LevelGenerator : MonoBehaviour
         foreach (var go in toDestroy) Destroy(go);
 
         int height = lines.Length;
+        int placed = 0;
         for (int row = 0; row < height; row++)
         {
             int y = invertY ? (height - 1 - row) : row;
@@ -36,27 +38,34 @@ public class LevelGenerator : MonoBehaviour
             for (int x = 0; x < ln.Length; x++)
             {
                 char ch = ln[x];
-                var prefab = PrefabForChar(ch);
-                if (prefab == null) continue; // sky
-                Vector3 pos = new Vector3(origin.x + x * tileSize, origin.y + y * tileSize, 0f);
-                Instantiate(prefab, pos, Quaternion.identity, this.transform);
+                var sprite = SpriteForChar(ch);
+                if (sprite == null) continue; // sky
+
+                var go = new GameObject($"tile_{x}_{y}");
+                go.transform.SetParent(this.transform, false);
+                go.transform.position = new Vector3(origin.x + x * tileSize, origin.y + y * tileSize, 0f);
+                var sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = sprite;
+                sr.sortingOrder = sortingOrder;
+                placed++;
             }
         }
+        Debug.Log($"LevelGenerator: placed {placed} tiles, rows={height}, cols={(height>0?lines[0].Length:0)}");
     }
 
-    GameObject PrefabForChar(char ch)
+    Sprite SpriteForChar(char ch)
     {
         switch (ch)
         {
-            case '#': return groundPrefab;
-            case 'B': return brickPrefab;
-            case '?': return questionPrefab;
-            case 'o': return coinPrefab;
+            case '#': return groundSprite;
+            case 'B': return brickSprite;
+            case '?': return questionSprite;
+            case 'o': return coinSprite;
             case 'p':
-            case 'P': return pipePrefab;
-            case 'c': return cannonPrefab;
+            case 'P': return pipeSprite;
+            case 'c': return cannonSprite;
             case 'y':
-            case 'Y': return springPrefab;
+            case 'Y': return springSprite;
             case 'e':
             case 'g':
             case 'k':
@@ -64,10 +73,10 @@ public class LevelGenerator : MonoBehaviour
             case 't':
             case 'l':
             case 'V':
-            case 'h': return enemyPrefab;
+            case 'h': return enemySprite;
             case '-':
             case ' ': return null; // sky
-            default: return otherPrefab;
+            default: return otherSprite;
         }
     }
 }
