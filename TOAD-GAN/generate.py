@@ -118,7 +118,8 @@ def generate_tensor(
             prev_up = None  # coarsest scale: pure noise
 
         # ── Generator forward pass ──
-        prev_output = gen(noise, prev_up)
+        # Softmax matches training-time inter-scale probability space
+        prev_output = F.softmax(gen(noise, prev_up), dim=1)
 
     assert prev_output is not None, "No generators were loaded"
     return prev_output

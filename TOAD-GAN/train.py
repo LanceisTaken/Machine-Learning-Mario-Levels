@@ -96,7 +96,9 @@ def forward_through_generators(
         else:
             prev_up = None
 
-        prev_output = gen(noise, prev_up)
+        # Softmax converts logits → probabilities, matching the one-hot
+        # format of real data so later scales receive consistent input.
+        prev_output = torch.nn.functional.softmax(gen(noise, prev_up), dim=1)
     return prev_output
 
 
@@ -207,7 +209,9 @@ def train(cfg: TOADGANConfig) -> None:
                 else:
                     prev_up = None
 
-                fake = gen(noise, prev_up).detach()
+                fake = torch.nn.functional.softmax(
+                    gen(noise, prev_up), dim=1,
+                ).detach()
                 d_fake = disc(fake)
                 loss_d_fake = d_fake.mean()
 
@@ -233,7 +237,7 @@ def train(cfg: TOADGANConfig) -> None:
             else:
                 prev_up = None
 
-            fake = gen(noise, prev_up)
+            fake = torch.nn.functional.softmax(gen(noise, prev_up), dim=1)
             loss_g_adv = -disc(fake).mean()
 
             # Reconstruction loss
@@ -251,8 +255,11 @@ def train(cfg: TOADGANConfig) -> None:
             else:
                 recon_prev_up = None
 
-            recon = gen(z_fixed, recon_prev_up)
-            loss_recon = torch.nn.functional.mse_loss(recon, real)
+            recon_logits = gen(z_fixed, recon_prev_up)
+            real_indices = real.argmax(dim=1)  # (1, H, W) integer labels
+            loss_recon = torch.nn.functional.cross_entropy(
+                recon_logits, real_indices,
+            )
 
             loss_g = loss_g_adv + cfg.alpha_recon * loss_recon
             loss_g.backward()
@@ -331,17 +338,17 @@ def main() -> None:
     parser.add_argument("--vocab", required=True, help="Path to vocab.json")
     parser.add_argument("--out_dir", default="TOAD-GAN/output",
                         help="Output directory for checkpoints")
-    parser.add_argument("--num_scales", type=int, default=3)
-    parser.add_argument("--scale_factor", type=float, default=0.75)
-    parser.add_argument("--num_epochs", type=int, default=2000)
+    parser.add_argument("--num_scales", type=int, default=5)
+    parser.add_argument("--scale_factor", type=float, default=0.67)
+    parser.add_argument("--num_epochs", type=int, default=4000)
     parser.add_argument("--lr_g", type=float, default=5e-4)
     parser.add_argument("--lr_d", type=float, default=5e-4)
     parser.add_argument("--lambda_grad", type=float, default=0.1)
     parser.add_argument("--alpha_recon", type=float, default=10.0)
     parser.add_argument("--d_steps", type=int, default=3)
-    parser.add_argument("--noise_amp", type=float, default=0.1)
-    parser.add_argument("--base_channels", type=int, default=32)
-    parser.add_argument("--kernel_size", type=int, default=3)
+    parser.add_argument("--noise_amp", type=float, default=0.15)
+    parser.add_argument("--base_channels", type=int, default=64)
+    parser.add_argument("--kernel_size", type=int, default=5)
     parser.add_argument("--num_conv_layers", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()

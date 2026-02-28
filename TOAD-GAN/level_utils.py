@@ -119,18 +119,30 @@ def create_gaussian_pyramid(
 ) -> List[torch.Tensor]:
     """Build a Gaussian pyramid from finest (index 0) to coarsest (index -1).
 
-    Each successive level is downscaled by ``scale_factor`` with bilinear
-    interpolation.  The returned list is **reversed** so that index 0 is the
-    *coarsest* scale (the training loop starts there).
+    Each successive level is downscaled by ``scale_factor`` using **nearest-
+    neighbour** interpolation on the integer tile indices, then re-encoded to
+    one-hot.  This preserves discrete token boundaries — bilinear interpolation
+    would average the one-hot channels and erase rare tokens.
+
+    The returned list is **reversed** so that index 0 is the *coarsest* scale
+    (the training loop starts there).
     """
+    num_tokens = tensor.shape[1]
+    # Start from integer indices so downscaling stays discrete
+    current_indices = tensor.squeeze(0).argmax(dim=0)  # (H, W)
+
     pyramid: List[torch.Tensor] = [tensor]
-    current = tensor
     for _ in range(1, num_scales):
-        h = max(1, round(current.shape[2] * scale_factor))
-        w = max(1, round(current.shape[3] * scale_factor))
-        current = F.interpolate(current, size=(h, w), mode="bilinear",
-                                align_corners=False)
-        pyramid.append(current)
+        h = max(1, round(current_indices.shape[0] * scale_factor))
+        w = max(1, round(current_indices.shape[1] * scale_factor))
+        # Nearest-neighbour resize on indices
+        idx_4d = current_indices.unsqueeze(0).unsqueeze(0).float()
+        idx_down = F.interpolate(idx_4d, size=(h, w), mode="nearest")
+        current_indices = idx_down.squeeze(0).squeeze(0).long()
+        # Re-encode to one-hot  →  (1, C, H, W)
+        oh = F.one_hot(current_indices, num_classes=num_tokens)
+        oh = oh.permute(2, 0, 1).unsqueeze(0).float()
+        pyramid.append(oh)
 
     # Reverse: coarsest first
     pyramid.reverse()

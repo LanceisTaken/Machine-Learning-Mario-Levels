@@ -67,12 +67,12 @@ class GeneratorBlock(nn.Module):
                 nn.LeakyReLU(0.2, inplace=True),
             ])
 
-        # Tail — project back to token space
+        # Tail — project back to token space (no Tanh: WGAN-GP does not
+        # need bounded output, and Tanh crushes rare-token logits)
         layers.append(
             nn.Conv2d(base_channels, num_tokens, kernel_size=kernel_size,
                       padding=pad, padding_mode="zeros")
         )
-        layers.append(nn.Tanh())
 
         self.body = nn.Sequential(*layers)
         self.apply(_weights_init)

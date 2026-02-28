@@ -11,14 +11,14 @@ class TOADGANConfig:
     """Centralised hyperparameters for TOAD-GAN training and generation."""
 
     # ── Pyramid ──────────────────────────────────────────────────────
-    num_scales: int = 3
-    scale_factor: float = 0.75
+    num_scales: int = 5
+    scale_factor: float = 0.67
 
     # ── Noise ────────────────────────────────────────────────────────
-    noise_amp: float = 0.1
+    noise_amp: float = 0.15
 
     # ── Training ─────────────────────────────────────────────────────
-    num_epochs: int = 2000
+    num_epochs: int = 4000
     lr_g: float = 5e-4
     lr_d: float = 5e-4
     beta1: float = 0.5
@@ -28,8 +28,8 @@ class TOADGANConfig:
 
     # ── Architecture ─────────────────────────────────────────────────
     num_conv_layers: int = 5
-    base_channels: int = 32
-    kernel_size: int = 3
+    base_channels: int = 64
+    kernel_size: int = 5
 
     # ── I/O ──────────────────────────────────────────────────────────
     level_path: str = ""
