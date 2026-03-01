@@ -125,6 +125,133 @@ def generate_tensor(
     return prev_output
 
 
+# ── Pipe post-processing ──────────────────────────────────────────────────
+
+def fix_pipes(
+    tile_ids: List[List[int]],
+    stoi: Dict[str, int],
+    min_height: int = 3,
+) -> List[List[int]]:
+    """Ensure pipe columns form unbroken vertical segments touching ground.
+
+    Rules applied per column:
+    1. Find the topmost ``§`` (pipe) token.
+    2. Fill downward with ``§`` until hitting ``#`` (ground).
+    3. Extend upward if needed so every pipe is at least *min_height* tiles tall.
+    4. If there is no ground below, or if the pipe would overlap non-sky
+       tiles when extending upward, remove the pipe entirely.
+    """
+    PIPE = stoi.get("§")
+    GROUND = stoi.get("#")
+    SKY = stoi.get("-")
+    if PIPE is None or GROUND is None or SKY is None:
+        return tile_ids  # vocab missing expected tokens – skip silently
+
+    rows = len(tile_ids)
+    cols = len(tile_ids[0]) if rows else 0
+
+    for c in range(cols):
+        # Find the bottommost ground row in this column
+        ground_row = None
+        for r in range(rows - 1, -1, -1):
+            if tile_ids[r][c] == GROUND:
+                ground_row = r
+                break
+
+        # Find the topmost pipe in this column
+        top_pipe = None
+        for r in range(rows):
+            if tile_ids[r][c] == PIPE:
+                top_pipe = r
+                break
+
+        if top_pipe is None:
+            continue  # no pipe in this column
+
+        if ground_row is None or top_pipe >= ground_row:
+            # No ground below or pipe is at/below ground – erase it
+            for r in range(rows):
+                if tile_ids[r][c] == PIPE:
+                    tile_ids[r][c] = SKY
+            continue
+
+        # Fill from topmost pipe down to (but not including) ground
+        for r in range(top_pipe, ground_row):
+            tile_ids[r][c] = PIPE
+
+        # Enforce minimum height: extend upward if too short
+        pipe_height = ground_row - top_pipe  # current height
+        if pipe_height < min_height:
+            new_top = ground_row - min_height
+            if new_top < 0:
+                # Not enough room – remove the pipe
+                for r in range(rows):
+                    if tile_ids[r][c] == PIPE:
+                        tile_ids[r][c] = SKY
+                continue
+            # Check that extension cells are sky (don't overwrite blocks)
+            can_extend = True
+            for r in range(new_top, top_pipe):
+                if tile_ids[r][c] != SKY:
+                    can_extend = False
+                    break
+            if can_extend:
+                for r in range(new_top, top_pipe):
+                    tile_ids[r][c] = PIPE
+            else:
+                # Can't extend safely – remove the pipe
+                for r in range(rows):
+                    if tile_ids[r][c] == PIPE:
+                        tile_ids[r][c] = SKY
+
+    return tile_ids
+
+
+# ── Lucky-block spacing ───────────────────────────────────────────────────
+
+def fix_lucky_blocks(
+    tile_ids: List[List[int]],
+    stoi: Dict[str, int],
+    min_gap: int = 3,
+) -> List[List[int]]:
+    """Ensure vertical spacing between ``?`` (lucky) blocks in each column.
+
+    Big Mario is 2 blocks tall and needs room to jump, so there must be at
+    least *min_gap* empty rows between any two ``?`` blocks in the same
+    column.  When blocks are too close, the **upper** one is replaced with
+    sky so the lower (more reachable) block stays.
+
+    The scan proceeds bottom-to-top so the lowest block — the easiest to
+    reach from the ground — is always kept.
+    """
+    LUCKY = stoi.get("?")
+    SKY = stoi.get("-")
+    if LUCKY is None or SKY is None:
+        return tile_ids  # vocab missing expected tokens – skip silently
+
+    rows = len(tile_ids)
+    cols = len(tile_ids[0]) if rows else 0
+
+    for c in range(cols):
+        # Collect lucky-block row indices bottom-to-top
+        lucky_rows = [r for r in range(rows - 1, -1, -1)
+                      if tile_ids[r][c] == LUCKY]
+
+        if len(lucky_rows) < 2:
+            continue  # 0 or 1 block – nothing to fix
+
+        # Walk bottom-to-top; keep the first (lowest), check gap for rest
+        last_kept = lucky_rows[0]
+        for r in lucky_rows[1:]:
+            gap = last_kept - r - 1  # empty rows between r and last_kept
+            if gap >= min_gap:
+                last_kept = r  # sufficient room – keep this one too
+            else:
+                tile_ids[r][c] = SKY  # too close – remove upper block
+
+    return tile_ids
+
+
 # ── Output conversion ──────────────────────────────────────────────────────
 
 def tensor_to_tile_ids(tensor: torch.Tensor) -> List[List[int]]:
@@ -240,6 +367,8 @@ def main() -> None:
 
         # ── Convert to tile-ID grid ──
         tile_ids = tensor_to_tile_ids(output_tensor)
+        tile_ids = fix_pipes(tile_ids, stoi)
+        tile_ids = fix_lucky_blocks(tile_ids, stoi)
         level_text = tile_ids_to_text(tile_ids, itos)
 
         # ── Derive output paths (append index for multi-sample) ──

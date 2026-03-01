@@ -196,6 +196,8 @@ def render_level_to_png(
     bg_color: Tuple[int, int, int] = (135, 206, 235),
 ) -> None:
     """Render level text to a coloured-tile PNG image."""
+    # Collapse compound tokens (e.g. 'pP' → '§') so each is one tile
+    level_text = _apply_compound(level_text)
     lines = level_text.splitlines()
     if not lines:
         raise ValueError("Empty level text")
