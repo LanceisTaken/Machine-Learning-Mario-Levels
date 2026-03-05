@@ -207,22 +207,75 @@ def fix_pipes(
     return tile_ids
 
 
+# ── Blocks-on-pipes fix ──────────────────────────────────────────────────
+
+def fix_blocks_on_pipes(
+    tile_ids: List[List[int]],
+    stoi: Dict[str, int],
+    clearance: int = 2,
+) -> List[List[int]]:
+    """Clear a buffer of rows above each pipe head to prevent blocks on pipes.
+
+    After ``fix_pipes`` has finalised each pipe column, scan every column.
+    For any column whose topmost tile is a ``§`` (pipe), the *clearance* rows
+    directly above that pipe head are replaced with sky (``-``).
+
+    A *clearance* of 2 (default) ensures that neither a tile placed immediately
+    on the pipe top nor one row higher (e.g. a lucky block) can remain,
+    giving a clean visual gap between any solid block and the pipe top.
+    """
+    PIPE = stoi.get("§")
+    SKY = stoi.get("-")
+    if PIPE is None or SKY is None:
+        return tile_ids  # vocab missing expected tokens – skip silently
+
+    rows = len(tile_ids)
+    cols = len(tile_ids[0]) if rows else 0
+
+    for c in range(cols):
+        # Find the topmost pipe row in this column
+        top_pipe = None
+        for r in range(rows):
+            if tile_ids[r][c] == PIPE:
+                top_pipe = r
+                break
+
+        if top_pipe is None:
+            continue  # no pipe in this column
+
+        # Clear the clearance zone above the pipe head
+        for offset in range(1, clearance + 1):
+            above = top_pipe - offset
+            if above >= 0 and tile_ids[above][c] != SKY:
+                tile_ids[above][c] = SKY
+
+    return tile_ids
+
+
 # ── Lucky-block spacing ───────────────────────────────────────────────────
 
 def fix_lucky_blocks(
     tile_ids: List[List[int]],
     stoi: Dict[str, int],
     min_gap: int = 3,
+    min_gap_above: int = 1,
 ) -> List[List[int]]:
-    """Ensure vertical spacing between ``?`` (lucky) blocks in each column.
+    """Ensure every ``?`` block has enough room to be reachable by Mario.
 
-    Big Mario is 2 blocks tall and needs room to jump, so there must be at
-    least *min_gap* empty rows between any two ``?`` blocks in the same
-    column.  When blocks are too close, the **upper** one is replaced with
-    sky so the lower (more reachable) block stays.
+    Three checks are applied per column:
 
-    The scan proceeds bottom-to-top so the lowest block — the easiest to
-    reach from the ground — is always kept.
+    **Pass 1a – downward clearance**:  For every ``?``, count contiguous
+    sky (``-``) rows immediately below it.  If that gap is less than
+    *min_gap* (default 3), the ``?`` is replaced with sky.
+
+    **Pass 1b – upward clearance**:  For every surviving ``?``, count
+    contiguous sky rows immediately above it.  If that gap is less than
+    *min_gap_above* (default 1), the ``?`` is replaced with sky.  This
+    prevents lucky blocks from spawning directly under bricks or stairs.
+
+    **Pass 2 – inter-block spacing**:  Among the surviving ``?`` blocks,
+    enforce at least *min_gap* empty rows between any two in the same
+    column (bottom-to-top scan; the lower block is always kept).
     """
     LUCKY = stoi.get("?")
     SKY = stoi.get("-")
@@ -237,10 +290,43 @@ def fix_lucky_blocks(
         lucky_rows = [r for r in range(rows - 1, -1, -1)
                       if tile_ids[r][c] == LUCKY]
 
-        if len(lucky_rows) < 2:
-            continue  # 0 or 1 block – nothing to fix
+        if not lucky_rows:
+            continue  # no ? blocks in this column
 
-        # Walk bottom-to-top; keep the first (lowest), check gap for rest
+        # ── Pass 1a: remove any ? with insufficient gap to solid tile below ──
+        for r in lucky_rows:
+            gap = 0
+            for below in range(r + 1, rows):
+                if tile_ids[below][c] == SKY:
+                    gap += 1
+                else:
+                    break
+            if gap < min_gap:
+                tile_ids[r][c] = SKY  # not enough room below – remove
+
+        # ── Pass 1b: remove any ? with insufficient gap above ──
+        for r in list(r for r in range(rows) if tile_ids[r][c] == LUCKY):
+            gap_above = 0
+            hit_solid = False
+            for above in range(r - 1, -1, -1):
+                if tile_ids[above][c] == SKY:
+                    gap_above += 1
+                else:
+                    hit_solid = True
+                    break
+            # Only penalize if there IS a solid tile above with too little gap;
+            # reaching the top edge (open sky) is fine.
+            if hit_solid and gap_above < min_gap_above:
+                tile_ids[r][c] = SKY  # solid tile too close above – remove
+
+        # Rebuild after removals
+        lucky_rows = [r for r in range(rows - 1, -1, -1)
+                      if tile_ids[r][c] == LUCKY]
+
+        if len(lucky_rows) < 2:
+            continue  # 0 or 1 block left – nothing more to fix
+
+        # ── Pass 2: enforce gap between remaining ? blocks ──
         last_kept = lucky_rows[0]
         for r in lucky_rows[1:]:
             gap = last_kept - r - 1  # empty rows between r and last_kept
@@ -368,6 +454,7 @@ def main() -> None:
         # ── Convert to tile-ID grid ──
         tile_ids = tensor_to_tile_ids(output_tensor)
         tile_ids = fix_pipes(tile_ids, stoi)
+        tile_ids = fix_blocks_on_pipes(tile_ids, stoi)
         tile_ids = fix_lucky_blocks(tile_ids, stoi)
         level_text = tile_ids_to_text(tile_ids, itos)
 
