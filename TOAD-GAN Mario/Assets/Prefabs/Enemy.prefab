@@ -12,9 +12,10 @@ GameObject:
   - component: {fileID: 5778851012003563793}
   - component: {fileID: 6248395952662679974}
   - component: {fileID: 4368288999011195977}
-  m_Layer: 6
+  - component: {fileID: 5656928463554220131}
+  m_Layer: 7
   m_Name: Enemy
-  m_TagString: Untagged
+  m_TagString: Enemy
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -166,3 +167,20 @@ Rigidbody2D:
   m_SleepingMode: 1
   m_CollisionDetection: 0
   m_Constraints: 4
+--- !u!114 &5656928463554220131
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3754798037214815833}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 88869711329553043b7af5e21f436b8c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EnemyPatrol
+  speed: 2
+  wallLayer:
+    serializedVersion: 2
+    m_Bits: 64
+  wallCheckDistance: 0.4

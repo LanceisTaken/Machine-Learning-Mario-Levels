@@ -11,6 +11,7 @@ GameObject:
   - component: {fileID: 6911493082236443703}
   - component: {fileID: 8341134806812581829}
   - component: {fileID: 8221694492260693808}
+  - component: {fileID: 2086273724553829188}
   m_Layer: 6
   m_Name: Lucky Block
   m_TagString: Untagged
@@ -138,3 +139,21 @@ BoxCollider2D:
   m_AutoTiling: 0
   m_Size: {x: 1, y: 1}
   m_EdgeRadius: 0
+--- !u!114 &2086273724553829188
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1473432409702596852}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 88d0b4411e7a13d4babdb69306aa8176, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::QuestionBlock
+  superMushroomPrefab: {fileID: 3630961884811241299, guid: d2a06c59bfcc6ea4485b3f5cd818610f, type: 3}
+  windDashPrefab: {fileID: 7179305686734967031, guid: 98af62e8cb8e67d4d983e2f6cc561cbc, type: 3}
+  usedSprite: {fileID: 0}
+  spawnOffset: 1.2
+  bounceHeight: 0.25
+  bounceDuration: 0.12

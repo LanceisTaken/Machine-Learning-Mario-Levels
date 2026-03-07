@@ -45,6 +45,10 @@ public class LevelInstantiator : MonoBehaviour
     [Tooltip("World-space size (in Unity units) of one tile. Default = 1.")]
     public float tileSize = 1f;
 
+    [Header("Physics")]
+    [Tooltip("Set this to your Ground layer so the CompositeCollider2D is on the correct layer for player ground-checks and enemy wall-checks.")]
+    public LayerMask groundLayer;
+
     [Header("Tile Prefab Mapping")]
     [Tooltip("Map a single character to its prefab. Leave 'air' characters unmapped.")]
     public List<TilePrefabEntry> tilePrefabs = new();
@@ -110,6 +114,18 @@ public class LevelInstantiator : MonoBehaviour
         if (GetComponent<CompositeCollider2D>() == null)
         {
             gameObject.AddComponent<CompositeCollider2D>();
+        }
+
+        // Put this root object on the Ground layer so the merged
+        // CompositeCollider2D is detected by player ground-checks
+        // and enemy wall raycasts.
+        if (groundLayer.value != 0)
+        {
+            // LayerMask.value is a bitmask; convert to the single layer index
+            int layerIndex = 0;
+            int bits = groundLayer.value;
+            while (bits > 1) { bits >>= 1; layerIndex++; }
+            gameObject.layer = layerIndex;
         }
 
         if (apiClient == null)
@@ -228,6 +244,22 @@ public class LevelInstantiator : MonoBehaviour
                     transform);
 
                 tile.name = $"Tile_{ch}_{col}_{row}";
+
+                // Merge static terrain colliders into the parent
+                // CompositeCollider2D so adjacent tiles form one seamless
+                // surface — eliminates invisible "dead spot" seams.
+                // Skip dynamic objects (enemies, question blocks, coins, etc.)
+                // that need their own independent colliders.
+                bool isStaticTerrain = ch == '#' || ch == 'S' ||   // solid / brick
+                                       ch == '<' || ch == '>' ||   // pipe top
+                                       ch == '[' || ch == ']' ||   // pipe body
+                                       ch == '§';                  // compound pipe
+                if (isStaticTerrain)
+                {
+                    BoxCollider2D bc = tile.GetComponent<BoxCollider2D>();
+                    if (bc != null)
+                        bc.compositeOperation = Collider2D.CompositeOperation.Merge;
+                }
             }
         }
 
