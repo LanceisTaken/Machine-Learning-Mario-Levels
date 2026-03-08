@@ -23,7 +23,7 @@ public class GameManager : MonoBehaviour
     public TMP_Text livesText;
 
     // Chain kill score table: index = kill number (capped at last value)
-    private static readonly int[] ChainScores = { 100, 200, 400, 800, 1000 };
+    private static readonly int[] ChainScores = { 100, 200, 400, 800, 1000, 2000, 4000, 8000 };
 
     // ── Unity lifecycle ────────────────────────────────────────────────────
     private void Awake()
@@ -57,12 +57,19 @@ public class GameManager : MonoBehaviour
 
     /// <summary>
     /// Award chain kill score and advance the chain counter.
-    /// Returns the points awarded this kill.
+    /// Returns the points awarded this kill, or 0 when a 1-UP is granted instead.
     /// </summary>
     public int NextChainKill()
     {
-        int idx = Mathf.Min(ChainKillCount, ChainScores.Length - 1);
-        int pts = ChainScores[idx];
+        if (ChainKillCount >= ChainScores.Length)
+        {
+            // Past the score table → award 1-UP
+            ChainKillCount++;
+            AddLife();
+            return 0; // 0 signals "1-UP" to callers
+        }
+
+        int pts = ChainScores[ChainKillCount];
         ChainKillCount++;
         AddScore(pts);
         return pts;

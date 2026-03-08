@@ -119,6 +119,18 @@ public class LevelInstantiator : MonoBehaviour
         // Put this root object on the Ground layer so the merged
         // CompositeCollider2D is detected by player ground-checks
         // and enemy wall raycasts.
+        // If groundLayer wasn't assigned in the Inspector, try to
+        // auto-detect it from the player's PlayerController.
+        if (groundLayer.value == 0 && player != null)
+        {
+            var pc = player.GetComponent<PlayerController>();
+            if (pc != null && pc.groundLayer.value != 0)
+            {
+                groundLayer = pc.groundLayer;
+                Debug.Log($"[LevelInstantiator] Auto-detected groundLayer from PlayerController: {groundLayer.value}");
+            }
+        }
+
         if (groundLayer.value != 0)
         {
             // LayerMask.value is a bitmask; convert to the single layer index
@@ -126,6 +138,13 @@ public class LevelInstantiator : MonoBehaviour
             int bits = groundLayer.value;
             while (bits > 1) { bits >>= 1; layerIndex++; }
             gameObject.layer = layerIndex;
+            Debug.Log($"[LevelInstantiator] Root object set to layer {layerIndex} ({LayerMask.LayerToName(layerIndex)})");
+        }
+        else
+        {
+            Debug.LogWarning("[LevelInstantiator] groundLayer is not set! " +
+                "Player ground-checks and enemy wall-checks may not work. " +
+                "Assign the Ground layer in the Inspector.");
         }
 
         if (apiClient == null)

@@ -101,6 +101,11 @@ public class QuestionBlock : MonoBehaviour
     {
         _used = true;
 
+        // Award 200 pts for hitting the ? block (same as coin from block in SMB)
+        if (GameManager.Instance != null)
+            GameManager.Instance.AddScore(200);
+        UIPopup.Show("+200", transform.position + Vector3.up * 0.5f, Color.yellow);
+
         // Swap to used/depleted sprite
         if (_sr != null && usedSprite != null)
             _sr.sprite = usedSprite;

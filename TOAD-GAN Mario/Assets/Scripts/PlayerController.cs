@@ -54,11 +54,17 @@ public class PlayerController : MonoBehaviour
     private DashTrail      _dashTrail;
 
     private bool    _isGrounded;
+    private bool    _wasGroundedLastFrame;
     private Vector2 _moveInput;
-    private bool    _jumpPressed;
     private bool    _isDashing;
     private float   _dashCooldownTimer;
     private Coroutine _starCoroutine;
+
+    // Jump-assist timers
+    private float _jumpBufferTimer;   // remembers jump press for a short window
+    private float _coyoteTimer;       // allows jumping briefly after leaving ground
+    private const float JumpBufferTime = 0.15f;
+    private const float CoyoteTime     = 0.1f;
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
     private void Awake()
@@ -98,23 +104,45 @@ public class PlayerController : MonoBehaviour
 
         _moveInput = new Vector2(horizontal, 0f);
 
-        _jumpPressed = Keyboard.current.spaceKey.wasPressedThisFrame ||
-                       Keyboard.current.wKey.wasPressedThisFrame      ||
-                       Keyboard.current.upArrowKey.wasPressedThisFrame;
+        bool jumpInputThisFrame = Keyboard.current.spaceKey.wasPressedThisFrame ||
+                                  Keyboard.current.wKey.wasPressedThisFrame      ||
+                                  Keyboard.current.upArrowKey.wasPressedThisFrame;
 
         // ── Ground Detection ───────────────────────────────────────────────
+        _wasGroundedLastFrame = _isGrounded;
         _isGrounded = groundCheck != null
             ? Physics2D.OverlapCircle(groundCheck.position, groundCheckRadius, groundLayer)
             : Physics2D.Raycast(transform.position, Vector2.down, 0.55f, groundLayer);
+
+        // Reset stomp/kill chain only on the frame Mario lands (airborne → grounded)
+        if (_isGrounded && !_wasGroundedLastFrame && GameManager.Instance != null)
+            GameManager.Instance.ResetChain();
 
 #if UNITY_EDITOR
         if (groundCheck == null && Time.frameCount % 300 == 0)
             Debug.LogWarning("[PlayerController] groundCheck not assigned — using raycast fallback.");
 #endif
 
+        // ── Coyote time: allow jumping briefly after walking off a ledge ──
+        if (_isGrounded)
+            _coyoteTimer = CoyoteTime;
+        else
+            _coyoteTimer -= Time.deltaTime;
+
+        // ── Jump buffering: remember press for a short window ─────────────
+        if (jumpInputThisFrame)
+            _jumpBufferTimer = JumpBufferTime;
+        else
+            _jumpBufferTimer -= Time.deltaTime;
+
         // ── Jump ───────────────────────────────────────────────────────────
-        if (_jumpPressed && _isGrounded)
+        bool canJump = _coyoteTimer > 0f;
+        if (_jumpBufferTimer > 0f && canJump)
+        {
             _rb.linearVelocity = new Vector2(_rb.linearVelocity.x, jumpForce);
+            _jumpBufferTimer = 0f;  // consume the buffered press
+            _coyoteTimer     = 0f;  // consume coyote time (prevent double-jump)
+        }
 
         // ── Sprite Flip ────────────────────────────────────────────────────
         if (_sr != null && horizontal != 0f)
@@ -208,7 +236,9 @@ public class PlayerController : MonoBehaviour
         if (enemy == null) return;
 
         int pts = GameManager.Instance != null ? GameManager.Instance.NextChainKill() : 100;
-        UIPopup.Show($"+{pts}", other.transform.position, Color.yellow);
+        string label = pts > 0 ? $"+{pts}" : "1-UP!";
+        Color  clr   = pts > 0 ? Color.yellow : new Color(0.4f, 1f, 0.4f);
+        UIPopup.Show(label, other.transform.position, clr);
         enemy.Die();
     }
 
@@ -314,7 +344,9 @@ public class PlayerController : MonoBehaviour
             if (enemy == null) continue;
 
             int pts = GameManager.Instance != null ? GameManager.Instance.NextChainKill() : 100;
-            UIPopup.Show($"+{pts}", hit.transform.position, Color.yellow);
+            string label = pts > 0 ? $"+{pts}" : "1-UP!";
+            Color  clr   = pts > 0 ? Color.yellow : new Color(0.4f, 1f, 0.4f);
+            UIPopup.Show(label, hit.transform.position, clr);
             enemy.Die();
         }
     }

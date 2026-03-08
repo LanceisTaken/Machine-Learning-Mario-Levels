@@ -79,22 +79,30 @@ public class EnemyPatrol : MonoBehaviour
         if (_col != null)
             castDist += _col.bounds.extents.x;
 
+        bool shouldReverse = false;
+
         RaycastHit2D wallHit = Physics2D.Raycast(
             origin, Vector2.right * _direction, castDist, wallLayer);
 
         // Reverse direction if we hit a wall, BUT ignore hits on other enemies!
         if (wallHit.collider != null && wallHit.collider.GetComponent<EnemyPatrol>() == null)
-            _direction *= -1;
+            shouldReverse = true;
 
         // ── Edge detection ──────────────────────────────────────────────
         // Cast a ray downward from slightly ahead of the enemy.
         // If there's no ground below, reverse direction to avoid falling.
-        float edgeCheckX = _col != null ? _col.bounds.extents.x : 0.4f;
-        Vector2 edgeOrigin = origin + Vector2.right * (_direction * edgeCheckX);
-        RaycastHit2D groundHit = Physics2D.Raycast(
-            edgeOrigin, Vector2.down, 1.2f, wallLayer);
+        if (!shouldReverse)
+        {
+            float edgeCheckX = _col != null ? _col.bounds.extents.x : 0.4f;
+            Vector2 edgeOrigin = origin + Vector2.right * (_direction * edgeCheckX);
+            RaycastHit2D groundHit = Physics2D.Raycast(
+                edgeOrigin, Vector2.down, 1.2f, wallLayer);
 
-        if (groundHit.collider == null)
+            if (groundHit.collider == null)
+                shouldReverse = true;
+        }
+
+        if (shouldReverse)
             _direction *= -1;
 
         // ── Apply movement ─────────────────────────────────────────────
@@ -145,7 +153,9 @@ public class EnemyPatrol : MonoBehaviour
             if (GameManager.Instance != null)
             {
                 int pts = GameManager.Instance.NextChainKill();
-                UIPopup.Show($"+{pts}", transform.position + Vector3.up * 0.5f, Color.yellow);
+                string label = pts > 0 ? $"+{pts}" : "1-UP!";
+                Color  clr   = pts > 0 ? Color.yellow : new Color(0.4f, 1f, 0.4f);
+                UIPopup.Show(label, transform.position + Vector3.up * 0.5f, clr);
             }
 
             // Give player a small bounce
