@@ -1,19 +1,19 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
 using UnityEngine;
 
 /// <summary>
-/// Parses the JSON payload returned by the TOAD-GAN Flask server and
-/// instantiates tile prefabs to build the level in-scene.
+/// Consumes tile data from <see cref="ToadGanGenerator"/> (local Sentis
+/// inference) and instantiates tile prefabs to build the level in-scene.
 ///
 /// Setup
 /// -----
 /// 1. Attach this component to an empty "LevelRoot" GameObject.
 /// 2. Assign a prefab for each tile character you care about in the
 ///    <see cref="tilePrefabs"/> list.
-/// 3. Drop your <see cref="ApiClient"/> component into the matching slot.
-/// 4. Hit Play – the level will be fetched and built automatically.
+/// 3. Drop your <see cref="ToadGanGenerator"/> component into the
+///    <see cref="generator"/> slot.
+/// 4. Hit Play – a level will be generated and built automatically.
 ///
 /// Tile map (TOAD-GAN default vocab)
 /// ----------------------------------
@@ -37,9 +37,9 @@ public class LevelInstantiator : MonoBehaviour
 {
     // ── Inspector ─────────────────────────────────────────────────────────
 
-    [Header("API")]
-    [Tooltip("The ApiClient that will fetch the level data.")]
-    public ApiClient apiClient;
+    [Header("Generator")]
+    [Tooltip("The ToadGanGenerator that runs local ONNX inference.")]
+    public ToadGanGenerator generator;
 
     [Header("Tile Size")]
     [Tooltip("World-space size (in Unity units) of one tile. Default = 1.")]
@@ -147,22 +147,22 @@ public class LevelInstantiator : MonoBehaviour
                 "Assign the Ground layer in the Inspector.");
         }
 
-        if (apiClient == null)
+        if (generator == null)
         {
-            Debug.LogError("[LevelInstantiator] No ApiClient assigned! Assign one in the Inspector.");
+            Debug.LogError("[LevelInstantiator] No ToadGanGenerator assigned! Assign one in the Inspector.");
             return;
         }
 
-        apiClient.OnLevelReceived += HandleLevelJson;
-        apiClient.OnError        += err => Debug.LogError("[LevelInstantiator] " + err);
+        generator.OnLevelGenerated += HandleGeneratedLevel;
+        generator.OnError          += err => Debug.LogError("[LevelInstantiator] " + err);
 
         // Request the first level immediately on Play
-        apiClient.RequestLevel();
+        generator.Generate();
     }
 
     private void Update()
     {
-        if (player == null || apiClient == null) return;
+        if (player == null || generator == null) return;
 
         CleanupOldTiles();
 
@@ -174,56 +174,51 @@ public class LevelInstantiator : MonoBehaviour
         if (playerX + (generateAheadDistance * tileSize) >= levelEdge)
         {
             _isGenerating = true;
-            apiClient.RequestLevel();
+            generator.Generate();
         }
     }
 
     private void OnDestroy()
     {
-        if (apiClient != null)
-            apiClient.OnLevelReceived -= HandleLevelJson;
+        if (generator != null)
+            generator.OnLevelGenerated -= HandleGeneratedLevel;
     }
 
     // ── Level building ────────────────────────────────────────────────────
 
-    /// <summary>Parse the JSON string and build the level.</summary>
-    private void HandleLevelJson(string json)
+    /// <summary>
+    /// Receives tile data directly from <see cref="ToadGanGenerator"/> and
+    /// builds the next level chunk.
+    /// </summary>
+    private void HandleGeneratedLevel(
+        int[][] tileIds,
+        Dictionary<string, string> tileMap,
+        int height,
+        int width)
     {
-        LevelPayload payload;
-        try
+        if (tileIds == null || tileIds.Length == 0)
         {
-            payload = JsonConvert.DeserializeObject<LevelPayload>(json);
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"[LevelInstantiator] Failed to parse JSON: {ex.Message}");
-            _isGenerating = false;
-            return;
-        }
-
-        if (payload?.tile_ids == null || payload.tile_ids.Length == 0)
-        {
-            Debug.LogError("[LevelInstantiator] Payload is empty or malformed.");
+            Debug.LogError("[LevelInstantiator] Received empty tile data.");
             _isGenerating = false;
             return;
         }
 
         var idToChar = new Dictionary<int, char>();
-        if (payload.tile_map != null)
+        if (tileMap != null)
         {
-            foreach (var kvp in payload.tile_map)
+            foreach (var kvp in tileMap)
             {
                 if (int.TryParse(kvp.Key, out int id) && kvp.Value.Length > 0)
                     idToChar[id] = kvp.Value[0];
             }
         }
 
-        Debug.Log($"[LevelInstantiator] Appending chunk at X={_nextChunkX}: {payload.height}h x {payload.width}w");
-        BuildChunk(payload.tile_ids, idToChar, payload.height, payload.width);
+        Debug.Log($"[LevelInstantiator] Appending chunk at X={_nextChunkX}: {height}h x {width}w");
+        BuildChunk(tileIds, idToChar, height, width);
 
         if (!_playerSpawned && player != null)
         {
-            SpawnPlayer(payload.tile_ids, idToChar, payload.height, payload.width);
+            SpawnPlayer(tileIds, idToChar, height, width);
             _playerSpawned = true;
         }
         _isGenerating = false;
@@ -357,11 +352,6 @@ public class LevelInstantiator : MonoBehaviour
         return idToChar.TryGetValue(tileIds[row][col], out char ch) ? ch : '?';
     }
 
-    // ── JSON data structures ──────────────────────────────────────────────
-    // These mirror the payload produced by generate.py / server.py.
-    // Newtonsoft.Json handles int[][] and Dictionary natively — no custom
-    // wrapper classes needed.
-
     private void CleanupOldTiles()
     {
         float cutoff = player.transform.position.x - destroyBehindDistance;
@@ -372,12 +362,4 @@ public class LevelInstantiator : MonoBehaviour
         }
     }
 
-    private class LevelPayload
-    {
-        public int                       height;
-        public int                       width;
-        public int[][]                   tile_ids;
-        // tile_map comes from the server as {"0":"-", "1":"#", ...}
-        public Dictionary<string, string> tile_map;
-    }
 }
