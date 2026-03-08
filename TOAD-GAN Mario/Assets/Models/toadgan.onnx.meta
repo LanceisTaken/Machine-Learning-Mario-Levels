@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 83c1fd6e39a527847a5cd6b3b5fb18f5
+guid: 86ef310854712aa418195b6168b4ab1b
 ScriptedImporter:
   internalIDToNameTable: []
   externalObjects: {}
@@ -8,4 +8,24 @@ ScriptedImporter:
   assetBundleName: 
   assetBundleVariant: 
   script: {fileID: 11500000, guid: f22407ba6b4157b4a93d0a670bd3dd57, type: 3}
-  dynamicDimConfigs: []
+  dynamicDimConfigs:
+  - name: height_0
+    size: -1
+  - name: width_0
+    size: -1
+  - name: height_1
+    size: -1
+  - name: width_1
+    size: -1
+  - name: height_2
+    size: -1
+  - name: width_2
+    size: -1
+  - name: height_3
+    size: -1
+  - name: width_3
+    size: -1
+  - name: height_4
+    size: -1
+  - name: width_4
+    size: -1

@@ -34,6 +34,16 @@ public class ToadGanGenerator : MonoBehaviour
              "backend is unavailable.")]
     [SerializeField] private BackendType preferredBackend = BackendType.GPUCompute;
 
+    [Header("Generation Parameters")]
+    [Tooltip("Noise temperature. > 1 = more variation, < 1 = closer to training distribution.")]
+    [SerializeField] [Range(0.1f, 3f)] private float temperature = 1f;
+
+    [Tooltip("Width multiplier relative to the training level size. 1 = original width.")]
+    [SerializeField] [Range(0.25f, 4f)] private float scaleW = 1f;
+
+    [Tooltip("Height multiplier relative to the training level size. 1 = original height.")]
+    [SerializeField] [Range(0.25f, 4f)] private float scaleH = 1f;
+
     [Header("Options")]
     [Tooltip("Fire a generation immediately when the component starts. " +
              "Disable when LevelInstantiator controls generation timing.")]
@@ -59,7 +69,8 @@ public class ToadGanGenerator : MonoBehaviour
 
     private Worker _worker;
     private ToadGanMeta _meta;
-    private Dictionary<string, string> _tileMap;
+    private Dictionary<string, string> _tileMap;   // itos: id → char
+    private Dictionary<string, int> _charToId;      // stoi: char → id
     private bool _ready;
 
     // ── Unity lifecycle ───────────────────────────────────────────────────
@@ -106,14 +117,20 @@ public class ToadGanGenerator : MonoBehaviour
         }
 
         Tensor<float>[] noiseTensors = null;
+        Tensor<float> temperatureTensor = null;
         Tensor<float> cpuOutput = null;
 
         try
         {
-            noiseTensors = BuildNoiseTensors();
+            // temperature scalar — first ONNX input
+            temperatureTensor = new Tensor<float>(new TensorShape(), new[] { temperature });
+            _worker.SetInput("temperature", temperatureTensor);
+
+            // per-scale noise tensors, sized by scaleH / scaleW
+            noiseTensors = BuildNoiseTensors(scaleH, scaleW);
 
             for (int s = 0; s < _meta.num_scales; s++)
-                _worker.SetInput(_meta.input_names[s], noiseTensors[s]);
+                _worker.SetInput(_meta.input_names[s + 1], noiseTensors[s]);
 
             _worker.Schedule();
 
@@ -125,6 +142,11 @@ public class ToadGanGenerator : MonoBehaviour
             int width    = cpuOutput.shape[3];
 
             int[][] tileIds = ArgmaxChannels(cpuOutput, channels, height, width);
+
+            // Post-processing passes matching generate.py / server.py
+            FixPipes(tileIds, height, width);
+            FixBlocksOnPipes(tileIds, height, width);
+            FixLuckyBlocks(tileIds, height, width);
 
             Debug.Log($"[ToadGanGenerator] Generated {height}×{width} tile grid " +
                       $"({channels} token channels).");
@@ -139,6 +161,8 @@ public class ToadGanGenerator : MonoBehaviour
         }
         finally
         {
+            temperatureTensor?.Dispose();
+
             if (noiseTensors != null)
                 foreach (var t in noiseTensors)
                     t?.Dispose();
@@ -159,6 +183,13 @@ public class ToadGanGenerator : MonoBehaviour
         string vocabJson = File.ReadAllText(Path.Combine(toadganDir, "vocab.json"));
         var vocab = JsonConvert.DeserializeObject<VocabFile>(vocabJson);
         _tileMap = vocab.itos;
+
+        _charToId = new Dictionary<string, int>();
+        foreach (var kvp in vocab.stoi)
+        {
+            if (int.TryParse(kvp.Value, out int id))
+                _charToId[kvp.Key] = id;
+        }
 
         Debug.Log($"[ToadGanGenerator] Meta loaded: {_meta.num_scales} scales, " +
                   $"{_meta.num_tokens} tokens.");
@@ -189,15 +220,22 @@ public class ToadGanGenerator : MonoBehaviour
 
     // ── Noise generation ──────────────────────────────────────────────────
 
-    private Tensor<float>[] BuildNoiseTensors()
+    private Tensor<float>[] BuildNoiseTensors(float scaleHeight, float scaleWidth)
     {
         var tensors = new Tensor<float>[_meta.num_scales];
 
         for (int s = 0; s < _meta.num_scales; s++)
         {
-            int[] shape = _meta.pyramid_shapes[s];
-            var tensorShape = new TensorShape(shape[0], shape[1], shape[2], shape[3]);
-            int length = shape[0] * shape[1] * shape[2] * shape[3];
+            int[] baseShape = _meta.pyramid_shapes[s];
+
+            // Apply scale multipliers to match generate.py's scale_h / scale_w logic
+            int b = baseShape[0];
+            int c = baseShape[1];
+            int h = Mathf.Max(1, Mathf.RoundToInt(baseShape[2] * scaleHeight));
+            int w = Mathf.Max(1, Mathf.RoundToInt(baseShape[3] * scaleWidth));
+
+            var tensorShape = new TensorShape(b, c, h, w);
+            int length = b * c * h * w;
 
             float[] data = GaussianNoise(length);
             tensors[s] = new Tensor<float>(tensorShape, data);
@@ -258,6 +296,171 @@ public class ToadGanGenerator : MonoBehaviour
         }
 
         return grid;
+    }
+
+    // ── Level fix-up passes (ported from generate.py) ──────────────────────
+
+    private int TryGetId(string ch) =>
+        _charToId.TryGetValue(ch, out int id) ? id : -1;
+
+    /// <summary>
+    /// Ensure pipe columns (§) form unbroken vertical segments touching
+    /// ground (#).  Pipes without ground below or that can't reach minimum
+    /// height are erased.
+    /// </summary>
+    private void FixPipes(int[][] grid, int rows, int cols, int minHeight = 3)
+    {
+        int PIPE   = TryGetId("§");
+        int GROUND = TryGetId("#");
+        int SKY    = TryGetId("-");
+        if (PIPE < 0 || GROUND < 0 || SKY < 0) return;
+
+        for (int c = 0; c < cols; c++)
+        {
+            int groundRow = -1;
+            for (int r = rows - 1; r >= 0; r--)
+            {
+                if (grid[r][c] == GROUND) { groundRow = r; break; }
+            }
+
+            int topPipe = -1;
+            for (int r = 0; r < rows; r++)
+            {
+                if (grid[r][c] == PIPE) { topPipe = r; break; }
+            }
+
+            if (topPipe < 0) continue;
+
+            if (groundRow < 0 || topPipe >= groundRow)
+            {
+                for (int r = 0; r < rows; r++)
+                    if (grid[r][c] == PIPE) grid[r][c] = SKY;
+                continue;
+            }
+
+            for (int r = topPipe; r < groundRow; r++)
+                grid[r][c] = PIPE;
+
+            int pipeHeight = groundRow - topPipe;
+            if (pipeHeight < minHeight)
+            {
+                int newTop = groundRow - minHeight;
+                if (newTop < 0)
+                {
+                    for (int r = 0; r < rows; r++)
+                        if (grid[r][c] == PIPE) grid[r][c] = SKY;
+                    continue;
+                }
+
+                bool canExtend = true;
+                for (int r = newTop; r < topPipe; r++)
+                {
+                    if (grid[r][c] != SKY) { canExtend = false; break; }
+                }
+
+                if (canExtend)
+                {
+                    for (int r = newTop; r < topPipe; r++)
+                        grid[r][c] = PIPE;
+                }
+                else
+                {
+                    for (int r = 0; r < rows; r++)
+                        if (grid[r][c] == PIPE) grid[r][c] = SKY;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Clear a buffer of rows above each pipe head so blocks can't sit
+    /// directly on top of pipes.
+    /// </summary>
+    private void FixBlocksOnPipes(int[][] grid, int rows, int cols, int clearance = 2)
+    {
+        int PIPE = TryGetId("§");
+        int SKY  = TryGetId("-");
+        if (PIPE < 0 || SKY < 0) return;
+
+        for (int c = 0; c < cols; c++)
+        {
+            int topPipe = -1;
+            for (int r = 0; r < rows; r++)
+            {
+                if (grid[r][c] == PIPE) { topPipe = r; break; }
+            }
+            if (topPipe < 0) continue;
+
+            for (int offset = 1; offset <= clearance; offset++)
+            {
+                int above = topPipe - offset;
+                if (above >= 0 && grid[above][c] != SKY)
+                    grid[above][c] = SKY;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ensure every ? block has enough vertical clearance below (and above)
+    /// to be reachable, and enforce minimum spacing between stacked ? blocks.
+    /// </summary>
+    private void FixLuckyBlocks(int[][] grid, int rows, int cols,
+                                int minGap = 3, int minGapAbove = 1)
+    {
+        int LUCKY = TryGetId("?");
+        int SKY   = TryGetId("-");
+        if (LUCKY < 0 || SKY < 0) return;
+
+        for (int c = 0; c < cols; c++)
+        {
+            // Pass 1a: remove ? with insufficient gap below
+            for (int r = rows - 1; r >= 0; r--)
+            {
+                if (grid[r][c] != LUCKY) continue;
+                int gap = 0;
+                for (int below = r + 1; below < rows; below++)
+                {
+                    if (grid[below][c] == SKY) gap++;
+                    else break;
+                }
+                if (gap < minGap)
+                    grid[r][c] = SKY;
+            }
+
+            // Pass 1b: remove ? with insufficient gap above
+            for (int r = 0; r < rows; r++)
+            {
+                if (grid[r][c] != LUCKY) continue;
+                int gapAbove = 0;
+                bool hitSolid = false;
+                for (int above = r - 1; above >= 0; above--)
+                {
+                    if (grid[above][c] == SKY) gapAbove++;
+                    else { hitSolid = true; break; }
+                }
+                if (hitSolid && gapAbove < minGapAbove)
+                    grid[r][c] = SKY;
+            }
+
+            // Pass 2: enforce spacing between surviving ? blocks (bottom-up)
+            var luckyRows = new List<int>();
+            for (int r = rows - 1; r >= 0; r--)
+            {
+                if (grid[r][c] == LUCKY) luckyRows.Add(r);
+            }
+            if (luckyRows.Count < 2) continue;
+
+            int lastKept = luckyRows[0];
+            for (int i = 1; i < luckyRows.Count; i++)
+            {
+                int r = luckyRows[i];
+                int between = lastKept - r - 1;
+                if (between >= minGap)
+                    lastKept = r;
+                else
+                    grid[r][c] = SKY;
+            }
+        }
     }
 
     // ── JSON data classes ─────────────────────────────────────────────────

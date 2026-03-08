@@ -41,6 +41,7 @@
     ]
   ],
   "input_names": [
+    "temperature",
     "noise_0",
     "noise_1",
     "noise_2",
