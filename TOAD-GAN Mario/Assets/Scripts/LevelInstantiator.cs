@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 /// <summary>
 /// Consumes tile data from <see cref="ToadGanGenerator"/> (local Sentis
@@ -64,6 +65,12 @@ public class LevelInstantiator : MonoBehaviour
 
     [Tooltip("How far behind the player (in units) before tiles get destroyed.")]
     public float destroyBehindDistance = 50f;
+
+    /// <summary>
+    /// Raised after each chunk is instantiated.
+    /// Arguments: wall-clock build time in milliseconds, number of tiles spawned.
+    /// </summary>
+    public event Action<float, int> OnChunkBuilt;
 
     /// <summary>Tracks the X offset (in world units) where the next chunk should start.</summary>
     private float _nextChunkX = 0f;
@@ -237,6 +244,9 @@ public class LevelInstantiator : MonoBehaviour
         int height,
         int width)
     {
+        var stopwatch = Stopwatch.StartNew();
+        int tilesSpawned = 0;
+
         for (int row = 0; row < height; row++)
         {
             for (int col = 0; col < width; col++)
@@ -274,13 +284,21 @@ public class LevelInstantiator : MonoBehaviour
                     if (bc != null)
                         bc.compositeOperation = Collider2D.CompositeOperation.Merge;
                 }
+
+                tilesSpawned++;
             }
         }
 
         // Move the offset forward for the next chunk
         _nextChunkX += width * tileSize;
 
-        Debug.Log($"[LevelInstantiator] Chunk built. Next chunk starts at X={_nextChunkX}");
+        stopwatch.Stop();
+        float buildTimeMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+
+        Debug.Log($"[LevelInstantiator] Chunk built ({tilesSpawned} tiles, {buildTimeMs:F1} ms). " +
+                  $"Next chunk starts at X={_nextChunkX}");
+
+        OnChunkBuilt?.Invoke(buildTimeMs, tilesSpawned);
     }
 
     private void SpawnPlayer(int[][] tileIds, Dictionary<int, char> idToChar, int height, int width)

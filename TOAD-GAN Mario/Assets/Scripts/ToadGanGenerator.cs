@@ -4,6 +4,7 @@ using System.IO;
 using Newtonsoft.Json;
 using UnityEngine;
 using Unity.InferenceEngine;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 /// <summary>
 /// Runs the TOAD-GAN multi-scale generation pipeline locally via Unity Sentis
@@ -65,6 +66,16 @@ public class ToadGanGenerator : MonoBehaviour
     /// <summary>Raised when something goes wrong during load or inference.</summary>
     public event Action<string> OnError;
 
+    /// <summary>Raised immediately before inference begins.</summary>
+    public event Action OnGenerationStarted;
+
+    /// <summary>
+    /// Raised after a successful generation with the wall-clock duration of
+    /// the full inference pass (noise build + ONNX schedule + readback +
+    /// post-processing) in milliseconds.
+    /// </summary>
+    public event Action<float> OnGenerationCompleted;
+
     // ── Runtime state ─────────────────────────────────────────────────────
 
     private Worker _worker;
@@ -116,6 +127,9 @@ public class ToadGanGenerator : MonoBehaviour
             return;
         }
 
+        OnGenerationStarted?.Invoke();
+        var stopwatch = Stopwatch.StartNew();
+
         Tensor<float>[] noiseTensors = null;
         Tensor<float> temperatureTensor = null;
         Tensor<float> cpuOutput = null;
@@ -148,13 +162,18 @@ public class ToadGanGenerator : MonoBehaviour
             FixBlocksOnPipes(tileIds, height, width);
             FixLuckyBlocks(tileIds, height, width);
 
+            stopwatch.Stop();
+            float durationMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+
             Debug.Log($"[ToadGanGenerator] Generated {height}×{width} tile grid " +
-                      $"({channels} token channels).");
+                      $"({channels} token channels) in {durationMs:F1} ms.");
 
             OnLevelGenerated?.Invoke(tileIds, _tileMap, height, width);
+            OnGenerationCompleted?.Invoke(durationMs);
         }
         catch (Exception ex)
         {
+            stopwatch.Stop();
             string msg = $"[ToadGanGenerator] Inference failed: {ex.Message}";
             Debug.LogError(msg);
             OnError?.Invoke(msg);

@@ -119,6 +119,56 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &40915846
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 40915848}
+  - component: {fileID: 40915847}
+  m_Layer: 0
+  m_Name: Generator
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &40915847
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 40915846}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d7a1af955c4bfc748831a70441707f04, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ToadGanGenerator
+  modelAsset: {fileID: 5022602860645237092, guid: 86ef310854712aa418195b6168b4ab1b, type: 3}
+  preferredBackend: 512
+  temperature: 1
+  scaleW: 1
+  scaleH: 1
+  generateOnStart: 0
+--- !u!4 &40915848
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 40915846}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 65.07395, y: 1.26109, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &238264052
 GameObject:
   m_ObjectHideFlags: 0
@@ -129,7 +179,6 @@ GameObject:
   m_Component:
   - component: {fileID: 238264055}
   - component: {fileID: 238264054}
-  - component: {fileID: 238264053}
   m_Layer: 0
   m_Name: LevelRoot
   m_TagString: Untagged
@@ -137,20 +186,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &238264053
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 238264052}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6fddb857ff701204cb9179248a74b979, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::ApiClient
-  serverUrl: http://localhost:5000
-  timeoutSeconds: 60
 --- !u!114 &238264054
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -163,11 +198,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6cd05671c101fe8438a389d6926b0e41, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LevelInstantiator
-  apiClient: {fileID: 238264053}
+  generator: {fileID: 40915847}
   tileSize: 1
   groundLayer:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 64
   tilePrefabs:
   - character: '#'
     prefab: {fileID: 8869099843195688221, guid: f92434dc439d8ea44a75469f72b26ae2, type: 3}
@@ -733,3 +768,4 @@ SceneRoots:
   - {fileID: 238264055}
   - {fileID: 1050479137}
   - {fileID: 653055655}
+  - {fileID: 40915848}
