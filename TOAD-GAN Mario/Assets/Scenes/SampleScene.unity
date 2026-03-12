@@ -151,7 +151,7 @@ MonoBehaviour:
   modelAsset: {fileID: 5022602860645237092, guid: 86ef310854712aa418195b6168b4ab1b, type: 3}
   preferredBackend: 512
   temperature: 1
-  scaleW: 1
+  scaleW: 0.5
   scaleH: 1
   generateOnStart: 0
 --- !u!4 &40915848
