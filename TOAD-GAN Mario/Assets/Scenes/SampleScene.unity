@@ -229,6 +229,7 @@ MonoBehaviour:
   player: {fileID: 1050479132}
   generateAheadDistance: 10
   destroyBehindDistance: 50
+  tilesPerFrameBudget: 25
 --- !u!4 &238264055
 Transform:
   m_ObjectHideFlags: 0
@@ -491,6 +492,7 @@ GameObject:
   m_Component:
   - component: {fileID: 653055655}
   - component: {fileID: 653055654}
+  - component: {fileID: 653055656}
   m_Layer: 0
   m_Name: GameManager
   m_TagString: Untagged
@@ -527,6 +529,26 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &653055656
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 653055653}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 90e845374e050054cac8c86753aad565, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PerformanceMonitor
+  generator: {fileID: 0}
+  levelInstantiator: {fileID: 0}
+  fpsWindowSize: 120
+  fpsDropWarningThreshold: 30
+  toggleKey: 96
+  showOnStart: 1
+  enableCsvLogging: 0
+  csvLogInterval: 1
 --- !u!1 &845917879
 GameObject:
   m_ObjectHideFlags: 0

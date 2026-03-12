@@ -53,10 +53,13 @@ public class PlayerController : MonoBehaviour
     private BoxCollider2D  _col;
     private DashTrail      _dashTrail;
 
+    private static readonly Collider2D[] _dashOverlapBuffer = new Collider2D[8];
+
     private bool    _isGrounded;
     private bool    _wasGroundedLastFrame;
     private Vector2 _moveInput;
     private bool    _isDashing;
+    private bool    _jumpQueued;
     private float   _dashCooldownTimer;
     private Coroutine _starCoroutine;
 
@@ -73,6 +76,8 @@ public class PlayerController : MonoBehaviour
         _sr        = GetComponent<SpriteRenderer>();
         _col       = GetComponent<BoxCollider2D>();
         _dashTrail = GetComponent<DashTrail>();
+
+        _rb.interpolation = RigidbodyInterpolation2D.Interpolate;
 
         // Frictionless material so player doesn't stick to walls
         if (_col != null && _col.sharedMaterial == null)
@@ -139,9 +144,9 @@ public class PlayerController : MonoBehaviour
         bool canJump = _coyoteTimer > 0f;
         if (_jumpBufferTimer > 0f && canJump)
         {
-            _rb.linearVelocity = new Vector2(_rb.linearVelocity.x, jumpForce);
-            _jumpBufferTimer = 0f;  // consume the buffered press
-            _coyoteTimer     = 0f;  // consume coyote time (prevent double-jump)
+            _jumpQueued      = true;  // executed in FixedUpdate to stay in sync with physics
+            _jumpBufferTimer = 0f;
+            _coyoteTimer     = 0f;
         }
 
         // ── Sprite Flip ────────────────────────────────────────────────────
@@ -159,6 +164,12 @@ public class PlayerController : MonoBehaviour
     private void FixedUpdate()
     {
         if (_isDashing) return;
+
+        if (_jumpQueued)
+        {
+            _rb.linearVelocity = new Vector2(_rb.linearVelocity.x, jumpForce);
+            _jumpQueued = false;
+        }
 
         _rb.linearVelocity = new Vector2(_moveInput.x * moveSpeed, _rb.linearVelocity.y);
 
@@ -334,11 +345,12 @@ public class PlayerController : MonoBehaviour
 
     private void KillEnemiesInRange()
     {
-        Collider2D[] hits = Physics2D.OverlapCircleAll(
-            transform.position, dashKillRadius, enemyLayer);
+        int hitCount = Physics2D.OverlapCircleNonAlloc(
+            transform.position, dashKillRadius, _dashOverlapBuffer, enemyLayer);
 
-        foreach (Collider2D hit in hits)
+        for (int i = 0; i < hitCount; i++)
         {
+            Collider2D hit = _dashOverlapBuffer[i];
             EnemyPatrol enemy = hit.GetComponent<EnemyPatrol>()
                              ?? hit.GetComponentInParent<EnemyPatrol>();
             if (enemy == null) continue;

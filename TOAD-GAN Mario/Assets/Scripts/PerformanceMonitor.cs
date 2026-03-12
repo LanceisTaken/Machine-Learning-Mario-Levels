@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using UnityEngine;
@@ -12,14 +11,14 @@ using UnityEngine.InputSystem;
 ///
 /// Metrics
 /// -------
-///  • FPS (current / avg / min over a rolling window)
-///  • Frame time (ms) — proxy for per-frame CPU load
-///  • Unity allocated memory (MB) and Mono heap usage (MB)
-///  • GC collection count (delta per 0.5 s sample)
-///  • ML inference time per chunk (last / avg)
-///  • Tile instantiation time per chunk (last / avg)
-///  • Active tile count in the scene
-///  • Total chunks generated this session
+///  - FPS (current / avg / min over a rolling window)
+///  - Frame time (ms) — proxy for per-frame CPU load
+///  - Unity allocated memory (MB) and Mono heap usage (MB)
+///  - GC collection count (delta per 0.5 s sample)
+///  - ML inference time per chunk (last / avg)
+///  - Tile instantiation time per chunk (last / avg)
+///  - Active tile count in the scene
+///  - Total chunks generated this session
 ///
 /// Controls
 /// --------
@@ -29,7 +28,7 @@ using UnityEngine.InputSystem;
 /// -----------
 ///  Enable <see cref="enableCsvLogging"/> to write one row per second to
 ///  <c>Application.persistentDataPath/perf_log_&lt;timestamp&gt;.csv</c>.
-///  Open Unity → Edit → Preferences → Player → "Open Persistent Data Folder"
+///  Open Unity - Edit - Preferences - Player - "Open Persistent Data Folder"
 ///  to locate the file after a play session.
 ///
 /// Setup
@@ -80,8 +79,12 @@ public class PerformanceMonitor : MonoBehaviour
 
     private bool _showHud;
 
-    // FPS / frame time
-    private readonly Queue<float> _fpsHistory = new Queue<float>();
+    // FPS / frame time — circular buffer instead of Queue to avoid
+    // enumerator allocations on every foreach traversal.
+    private float[] _fpsRing;
+    private int     _fpsRingHead;
+    private int     _fpsRingCount;
+
     private float _currentFps;
     private float _avgFps;
     private float _minFps = float.MaxValue;
@@ -119,10 +122,18 @@ public class PerformanceMonitor : MonoBehaviour
     private StreamWriter _csv;
     private float        _csvTimer;
 
-    // GUI skin (built once)
+    // Cached reference to the toggle key's ButtonControl — avoids a boxed
+    // Enum.IsDefined(typeof(Key), toggleKey) allocation every frame.
+    private UnityEngine.InputSystem.Controls.ButtonControl _toggleKeyControl;
+
+    // GUI styles — built once and reused every OnGUI call.
+    // Creating new GUIStyle instances inside OnGUI was the single largest
+    // source of per-frame managed allocations in the project.
     private GUIStyle _boxStyle;
     private GUIStyle _labelStyle;
     private GUIStyle _headerStyle;
+    private GUIStyle _sectionStyle;
+    private GUIStyle _rowLabelStyle;
     private bool     _stylesBuilt;
 
     // ── Unity lifecycle ───────────────────────────────────────────────────
@@ -130,8 +141,8 @@ public class PerformanceMonitor : MonoBehaviour
     private void Start()
     {
         _showHud = showOnStart;
+        _fpsRing = new float[fpsWindowSize];
 
-        // Auto-discover if not assigned in the Inspector
         if (generator == null)
             generator = FindObjectOfType<ToadGanGenerator>();
 
@@ -157,27 +168,21 @@ public class PerformanceMonitor : MonoBehaviour
 
         _prevGcCount = TotalGcCount();
 
+        var kb = Keyboard.current;
+        if (kb != null)
+        {
+            try   { _toggleKeyControl = kb[toggleKey]; }
+            catch { _toggleKeyControl = kb[Key.F3]; toggleKey = Key.F3; }
+        }
+
         if (enableCsvLogging)
             OpenCsvLog();
     }
 
     private void Update()
     {
-        var keyboard = Keyboard.current;
-        if (keyboard != null)
-        {
-            // toggleKey may contain an invalid serialized value from before the
-            // migration to the new Input System. Guard against that so we
-            // never pass an out-of-range enum to Keyboard.this[Key].
-            if (!Enum.IsDefined(typeof(Key), toggleKey))
-            {
-                toggleKey = Key.F3;
-            }
-
-            var keyControl = keyboard[toggleKey];
-            if (keyControl != null && keyControl.wasPressedThisFrame)
-                _showHud = !_showHud;
-        }
+        if (_toggleKeyControl != null && _toggleKeyControl.wasPressedThisFrame)
+            _showHud = !_showHud;
 
         TrackFps();
         TrackMemory();
@@ -232,28 +237,34 @@ public class PerformanceMonitor : MonoBehaviour
         _frameTimeMs = dt * 1000f;
         _currentFps  = dt > 0f ? 1f / dt : 0f;
 
-        _fpsHistory.Enqueue(_currentFps);
-        if (_fpsHistory.Count > fpsWindowSize)
-            _fpsHistory.Dequeue();
+        // Write into the circular buffer (no allocation)
+        _fpsRing[_fpsRingHead] = _currentFps;
+        _fpsRingHead = (_fpsRingHead + 1) % _fpsRing.Length;
+        if (_fpsRingCount < _fpsRing.Length)
+            _fpsRingCount++;
 
-        float sum  = 0f;
-        _minFps    = float.MaxValue;
-        _maxFps    = 0f;
+        // Compute stats with a simple for-loop over the array
+        float sum = 0f;
+        _minFps = float.MaxValue;
+        _maxFps = 0f;
 
-        foreach (float f in _fpsHistory)
+        for (int i = 0; i < _fpsRingCount; i++)
         {
+            float f = _fpsRing[i];
             sum += f;
             if (f < _minFps) _minFps = f;
             if (f > _maxFps) _maxFps = f;
         }
 
-        _avgFps = _fpsHistory.Count > 0 ? sum / _fpsHistory.Count : 0f;
+        _avgFps = _fpsRingCount > 0 ? sum / _fpsRingCount : 0f;
 
         _dropWarnCooldown -= dt;
         if (_currentFps < fpsDropWarningThreshold && _dropWarnCooldown <= 0f)
         {
+#if UNITY_EDITOR
             Debug.LogWarning($"[PerformanceMonitor] FPS drop detected: " +
                              $"{_currentFps:F1} fps  ({_frameTimeMs:F1} ms/frame)");
+#endif
             _dropWarnCooldown = 2f;
         }
     }
@@ -285,17 +296,15 @@ public class PerformanceMonitor : MonoBehaviour
 
         EnsureStyles();
 
-        // Calculate total height from number of lines we'll draw
         int activeTiles = levelInstantiator != null
             ? levelInstantiator.transform.childCount
             : -1;
 
-        int lineCount = 16; // base line count
+        int lineCount = 16;
         int totalHeight = HudPadding * 2 + lineCount * HudLineHeight + 4;
 
         Rect area = new Rect(10, 10, HudWidth, totalHeight);
 
-        // Semi-transparent dark background
         Color prev = GUI.color;
         GUI.color = new Color(0f, 0f, 0f, HudAlpha);
         GUI.Box(area, GUIContent.none, _boxStyle);
@@ -313,16 +322,16 @@ public class PerformanceMonitor : MonoBehaviour
         // ── FPS / Frame time ──────────────────────────────────────────────
         DrawSectionLabel("FRAME RATE");
 
-        Color fpsColor  = FpsColor(_currentFps);
-        Color ftColor   = FrameTimeColor(_frameTimeMs);
+        string fpsHex = FpsColorHex(_currentFps);
+        string ftHex  = FrameTimeColorHex(_frameTimeMs);
 
         DrawRow("FPS",
-            $"<color=#{ColorHex(fpsColor)}>{_currentFps:F0}</color>  " +
-            $"avg <color=#{ColorHex(fpsColor)}>{_avgFps:F0}</color>  " +
-            $"min <color=#{ColorHex(FpsColor(_minFps))}>{_minFps:F0}</color>");
+            $"<color=#{fpsHex}>{_currentFps:F0}</color>  " +
+            $"avg <color=#{fpsHex}>{_avgFps:F0}</color>  " +
+            $"min <color=#{FpsColorHex(_minFps)}>{_minFps:F0}</color>");
 
         DrawRow("Frame Time",
-            $"<color=#{ColorHex(ftColor)}>{_frameTimeMs:F2} ms</color>");
+            $"<color=#{ftHex}>{_frameTimeMs:F2} ms</color>");
 
         // ── Memory ────────────────────────────────────────────────────────
         DrawSectionLabel("MEMORY  (sampled every 0.5 s)");
@@ -332,9 +341,9 @@ public class PerformanceMonitor : MonoBehaviour
         DrawRow("Mono Heap",  $"{BytesToMb(_monoHeapBytes):F1} MB  " +
                               $"used {BytesToMb(_monoUsedBytes):F1} MB");
 
-        Color gcColor = _gcDelta > 0 ? Color.yellow : Color.green;
+        string gcHex = _gcDelta > 0 ? HexYellow : HexGreen;
         DrawRow("GC Allocs",
-            $"<color=#{ColorHex(gcColor)}>{_gcDelta} collection(s) / 0.5 s</color>");
+            $"<color=#{gcHex}>{_gcDelta} collection(s) / 0.5 s</color>");
 
         // ── Level generation ──────────────────────────────────────────────
         DrawSectionLabel("LEVEL GENERATION");
@@ -381,6 +390,18 @@ public class PerformanceMonitor : MonoBehaviour
             fontSize  = 13,
             normal    = { textColor = new Color(0.9f, 0.9f, 0.9f) }
         };
+
+        _sectionStyle = new GUIStyle(_labelStyle)
+        {
+            fontStyle = FontStyle.Bold,
+            normal    = { textColor = new Color(0.7f, 0.85f, 1f) }
+        };
+
+        _rowLabelStyle = new GUIStyle(_labelStyle)
+        {
+            normal     = { textColor = new Color(0.75f, 0.75f, 0.75f) },
+            fixedWidth = 90
+        };
     }
 
     private void DrawHeader(string text)
@@ -390,47 +411,41 @@ public class PerformanceMonitor : MonoBehaviour
 
     private void DrawSectionLabel(string text)
     {
-        GUIStyle s = new GUIStyle(_labelStyle)
-        {
-            fontStyle = FontStyle.Bold,
-            normal    = { textColor = new Color(0.7f, 0.85f, 1f) }
-        };
-        GUILayout.Label(text, s);
+        GUILayout.Label(text, _sectionStyle);
     }
 
     private void DrawRow(string label, string value)
     {
         GUILayout.BeginHorizontal();
-        GUIStyle labelLeft = new GUIStyle(_labelStyle)
-        {
-            normal = { textColor = new Color(0.75f, 0.75f, 0.75f) },
-            fixedWidth = 90
-        };
-        GUILayout.Label(label, labelLeft);
+        GUILayout.Label(label, _rowLabelStyle);
         GUILayout.Label(value, _labelStyle);
         GUILayout.EndHorizontal();
     }
 
     // ── Color helpers ─────────────────────────────────────────────────────
+    // Pre-computed hex strings so OnGUI never calls ColorUtility.ToHtmlStringRGB,
+    // which allocates a new managed string on every call.  These are computed
+    // exactly once at class load.
+    private static readonly string HexGreen  = ColorUtility.ToHtmlStringRGB(new Color(0.4f, 1f,    0.4f));
+    private static readonly string HexYellow = ColorUtility.ToHtmlStringRGB(new Color(1f,   0.85f, 0.2f));
+    private static readonly string HexRed    = ColorUtility.ToHtmlStringRGB(new Color(1f,   0.35f, 0.35f));
+    private static readonly string HexBlue   = ColorUtility.ToHtmlStringRGB(new Color(0.7f, 0.85f, 1f));
 
-    private static Color FpsColor(float fps)
+    private static string FpsColorHex(float fps)
     {
-        if (fps >= 60f) return new Color(0.4f, 1f, 0.4f);   // green
-        if (fps >= 30f) return new Color(1f,  0.85f, 0.2f); // yellow
-        return new Color(1f, 0.35f, 0.35f);                  // red
+        if (fps >= 60f) return HexGreen;
+        if (fps >= 30f) return HexYellow;
+        return HexRed;
     }
 
-    private static Color FrameTimeColor(float ms)
+    private static string FrameTimeColorHex(float ms)
     {
-        if (ms <= 16.67f) return new Color(0.4f, 1f, 0.4f); // ≤ 16 ms → 60+ fps
-        if (ms <= 33.33f) return new Color(1f, 0.85f, 0.2f);
-        return new Color(1f, 0.35f, 0.35f);
+        if (ms <= 16.67f) return HexGreen;
+        if (ms <= 33.33f) return HexYellow;
+        return HexRed;
     }
 
     private static float BytesToMb(long bytes) => bytes / 1_048_576f;
-
-    private static string ColorHex(Color c) =>
-        ColorUtility.ToHtmlStringRGB(c);
 
     // ── CSV logging ───────────────────────────────────────────────────────
 

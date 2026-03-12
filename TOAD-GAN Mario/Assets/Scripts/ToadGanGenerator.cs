@@ -84,6 +84,11 @@ public class ToadGanGenerator : MonoBehaviour
     private Dictionary<string, int> _charToId;      // stoi: char → id
     private bool _ready;
 
+    // Reusable collections for post-processing passes.  Allocated once and
+    // cleared before each use so chunk generation does not produce GC garbage.
+    private readonly HashSet<int> _pipeIds   = new HashSet<int>();
+    private readonly List<int>    _luckyRows = new List<int>();
+
     // ── Unity lifecycle ───────────────────────────────────────────────────
 
     private void Start()
@@ -394,19 +399,31 @@ public class ToadGanGenerator : MonoBehaviour
     /// <summary>
     /// Clear a buffer of rows above each pipe head so blocks can't sit
     /// directly on top of pipes.
+    /// Recognises all pipe tile characters (§, &lt;, &gt;, [, ]) so that the
+    /// clearance is applied regardless of which pipe token the vocab uses.
     /// </summary>
     private void FixBlocksOnPipes(int[][] grid, int rows, int cols, int clearance = 2)
     {
-        int PIPE = TryGetId("§");
-        int SKY  = TryGetId("-");
-        if (PIPE < 0 || SKY < 0) return;
+        int SKY = TryGetId("-");
+        if (SKY < 0) return;
+
+        // Collect every pipe-related tile ID that is present in this vocab.
+        // Using a set means the column scan below works even when the model
+        // outputs the 4-quadrant tokens (<, >, [, ]) instead of the compound §.
+        _pipeIds.Clear();
+        foreach (string ch in _pipeCharKeys)
+        {
+            int id = TryGetId(ch);
+            if (id >= 0) _pipeIds.Add(id);
+        }
+        if (_pipeIds.Count == 0) return;
 
         for (int c = 0; c < cols; c++)
         {
             int topPipe = -1;
             for (int r = 0; r < rows; r++)
             {
-                if (grid[r][c] == PIPE) { topPipe = r; break; }
+                if (_pipeIds.Contains(grid[r][c])) { topPipe = r; break; }
             }
             if (topPipe < 0) continue;
 
@@ -432,10 +449,26 @@ public class ToadGanGenerator : MonoBehaviour
 
         for (int c = 0; c < cols; c++)
         {
-            // Pass 1a: remove ? with insufficient gap below
+            // Pass 1a: remove ? with insufficient gap below.
+            // Two-tier check:
+            //   (i)  Hard rule – the tile directly below must always be empty sky,
+            //        regardless of minGap.  A lucky block must never sit flush on
+            //        any solid surface (ground, pipe top, brick, etc.).
+            //   (ii) Soft rule – require minGap consecutive sky tiles below so the
+            //        block is reachable and visually readable.
             for (int r = rows - 1; r >= 0; r--)
             {
                 if (grid[r][c] != LUCKY) continue;
+
+                // (i) Hard check: tile directly below must be sky.
+                int directlyBelow = r + 1;
+                if (directlyBelow >= rows || grid[directlyBelow][c] != SKY)
+                {
+                    grid[r][c] = SKY;
+                    continue;
+                }
+
+                // (ii) Soft check: count consecutive sky tiles below.
                 int gap = 0;
                 for (int below = r + 1; below < rows; below++)
                 {
@@ -462,17 +495,17 @@ public class ToadGanGenerator : MonoBehaviour
             }
 
             // Pass 2: enforce spacing between surviving ? blocks (bottom-up)
-            var luckyRows = new List<int>();
+            _luckyRows.Clear();
             for (int r = rows - 1; r >= 0; r--)
             {
-                if (grid[r][c] == LUCKY) luckyRows.Add(r);
+                if (grid[r][c] == LUCKY) _luckyRows.Add(r);
             }
-            if (luckyRows.Count < 2) continue;
+            if (_luckyRows.Count < 2) continue;
 
-            int lastKept = luckyRows[0];
-            for (int i = 1; i < luckyRows.Count; i++)
+            int lastKept = _luckyRows[0];
+            for (int i = 1; i < _luckyRows.Count; i++)
             {
-                int r = luckyRows[i];
+                int r = _luckyRows[i];
                 int between = lastKept - r - 1;
                 if (between >= minGap)
                     lastKept = r;
@@ -481,6 +514,9 @@ public class ToadGanGenerator : MonoBehaviour
             }
         }
     }
+
+    // Allocated once — reused in every FixBlocksOnPipes call.
+    private static readonly string[] _pipeCharKeys = { "§", "<", ">", "[", "]" };
 
     // ── JSON data classes ─────────────────────────────────────────────────
 

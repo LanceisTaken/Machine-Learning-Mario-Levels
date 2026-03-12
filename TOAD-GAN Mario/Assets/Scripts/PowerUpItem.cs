@@ -32,6 +32,11 @@ public abstract class PowerUpItem : MonoBehaviour
     private int _moveDir = 1; // +1 = right, -1 = left
     private bool _collected;
 
+    // Pre-allocated buffer for NonAlloc overlap checks — avoids a heap
+    // allocation every frame.  Size 4 is enough for any realistic scenario
+    // (player + 3 others in range at once).
+    private static readonly Collider2D[] _overlapBuffer = new Collider2D[4];
+
     // ── Lifecycle ──────────────────────────────────────────────────────────
     protected virtual void Awake()
     {
@@ -89,10 +94,12 @@ public abstract class PowerUpItem : MonoBehaviour
         if (_collected) return;
 
         // ── Polling-based player pickup ────────────────────────────────────
-        // This works regardless of collision layers, trigger setup, or composite issues.
-        Collider2D[] hits = Physics2D.OverlapCircleAll(transform.position, pickupRadius);
-        foreach (Collider2D hit in hits)
+        // NonAlloc variant writes into a pre-allocated static buffer instead
+        // of returning a new Collider2D[] array each call.
+        int hitCount = Physics2D.OverlapCircleNonAlloc(transform.position, pickupRadius, _overlapBuffer);
+        for (int i = 0; i < hitCount; i++)
         {
+            Collider2D hit = _overlapBuffer[i];
             if (!hit.CompareTag("Player")) continue;
 
             PlayerController player = hit.GetComponent<PlayerController>()

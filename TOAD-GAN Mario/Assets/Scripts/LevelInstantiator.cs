@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Stopwatch = System.Diagnostics.Stopwatch;
@@ -57,17 +58,21 @@ public class LevelInstantiator : MonoBehaviour
     [Header("Player")]
     [Tooltip("The player prefab or existing player in the scene.")]
     public GameObject player;
-    
 
     [Header("Infinite Generation")]
-    [Tooltip("How close (in tiles) the player can get to the level edge before generating more.")]
-    public float generateAheadDistance = 10f;
+    [Tooltip("How close (in tiles) the player can get to the level edge before generating more. Increase for a larger safety buffer before the chunk arrives.")]
+    public float generateAheadDistance = 20f;
 
     [Tooltip("How far behind the player (in units) before tiles get destroyed.")]
     public float destroyBehindDistance = 50f;
 
+    [Header("Performance")]
+    [Tooltip("Maximum tile GameObjects instantiated per frame during chunk building. Lower = smoother framerate during build; higher = chunk appears faster.")]
+    public int tilesPerFrameBudget = 25;
+
     /// <summary>
-    /// Raised after each chunk is instantiated.
+    /// Raised after each chunk is fully instantiated and the CompositeCollider2D
+    /// geometry has been rebuilt.
     /// Arguments: wall-clock build time in milliseconds, number of tiles spawned.
     /// </summary>
     public event Action<float, int> OnChunkBuilt;
@@ -96,6 +101,43 @@ public class LevelInstantiator : MonoBehaviour
     /// <summary>Lookup built from <see cref="tilePrefabs"/> at Start.</summary>
     private Dictionary<char, GameObject> _prefabMap;
 
+    /// <summary>
+    /// All currently-alive tile Transforms, maintained so CleanupOldTiles
+    /// never has to enumerate the Transform hierarchy (which allocates an
+    /// IEnumerator every call).
+    /// </summary>
+    private readonly List<Transform> _activeTiles = new List<Transform>();
+
+    /// <summary>
+    /// World-space X position of each tile in <see cref="_activeTiles"/>,
+    /// cached at spawn time.  Static tiles never move, so this never needs
+    /// to be refreshed — it lets CleanupOldTiles compare plain floats
+    /// instead of calling Transform.position (a native C++ property) for
+    /// every tile every frame.  Accessing transform positions while the
+    /// physics job system is running (i.e. whenever the player is moving)
+    /// causes a job-sync stall; this eliminates that entirely.
+    /// </summary>
+    private readonly List<float> _activeTileXs = new List<float>();
+
+    /// <summary>
+    /// Player X position at the last CleanupOldTiles pass.  The loop only
+    /// runs again once the player has moved at least
+    /// <see cref="CleanupMoveThreshold"/> units, skipping the iteration
+    /// entirely on frames where nothing could have crossed the cutoff.
+    /// </summary>
+    private float _lastCleanupPlayerX = float.MinValue;
+    private const float CleanupMoveThreshold = 0.25f;
+
+    /// <summary>Cached reference to the CompositeCollider2D on this object.</summary>
+    private CompositeCollider2D _composite;
+
+    /// <summary>
+    /// Cached Rigidbody2D of the player.  Reading Rigidbody2D.position is safe
+    /// from the main thread without stalling the physics job, unlike reading
+    /// Transform.position while a Rigidbody2D is active.
+    /// </summary>
+    private Rigidbody2D _playerRb;
+
     // ── Unity lifecycle ───────────────────────────────────────────────────
 
     private void Start()
@@ -118,16 +160,20 @@ public class LevelInstantiator : MonoBehaviour
             var rb = gameObject.AddComponent<Rigidbody2D>();
             rb.bodyType = RigidbodyType2D.Static;
         }
-        if (GetComponent<CompositeCollider2D>() == null)
-        {
-            gameObject.AddComponent<CompositeCollider2D>();
-        }
+
+        _composite = GetComponent<CompositeCollider2D>();
+        if (_composite == null)
+            _composite = gameObject.AddComponent<CompositeCollider2D>();
+
+        // Use Manual generation so each tile's compositeOperation assignment
+        // does NOT trigger an immediate geometry rebuild.  We call
+        // GenerateGeometry() once per chunk after all tiles are placed,
+        // replacing ~350 incremental rebuilds with a single one.
+        _composite.generationType = CompositeCollider2D.GenerationType.Manual;
 
         // Put this root object on the Ground layer so the merged
         // CompositeCollider2D is detected by player ground-checks
         // and enemy wall raycasts.
-        // If groundLayer wasn't assigned in the Inspector, try to
-        // auto-detect it from the player's PlayerController.
         if (groundLayer.value == 0 && player != null)
         {
             var pc = player.GetComponent<PlayerController>();
@@ -140,7 +186,6 @@ public class LevelInstantiator : MonoBehaviour
 
         if (groundLayer.value != 0)
         {
-            // LayerMask.value is a bitmask; convert to the single layer index
             int layerIndex = 0;
             int bits = groundLayer.value;
             while (bits > 1) { bits >>= 1; layerIndex++; }
@@ -163,6 +208,9 @@ public class LevelInstantiator : MonoBehaviour
         generator.OnLevelGenerated += HandleGeneratedLevel;
         generator.OnError          += err => Debug.LogError("[LevelInstantiator] " + err);
 
+        if (player != null)
+            _playerRb = player.GetComponent<Rigidbody2D>();
+
         // Request the first level immediately on Play
         generator.Generate();
     }
@@ -176,7 +224,7 @@ public class LevelInstantiator : MonoBehaviour
         if (_isGenerating) return;
 
         float levelEdge = _nextChunkX;
-        float playerX = player.transform.position.x;
+        float playerX = _playerRb != null ? _playerRb.position.x : player.transform.position.x;
 
         if (playerX + (generateAheadDistance * tileSize) >= levelEdge)
         {
@@ -195,7 +243,7 @@ public class LevelInstantiator : MonoBehaviour
 
     /// <summary>
     /// Receives tile data directly from <see cref="ToadGanGenerator"/> and
-    /// builds the next level chunk.
+    /// starts a coroutine to build the next level chunk over multiple frames.
     /// </summary>
     private void HandleGeneratedLevel(
         int[][] tileIds,
@@ -220,32 +268,49 @@ public class LevelInstantiator : MonoBehaviour
             }
         }
 
-        Debug.Log($"[LevelInstantiator] Appending chunk at X={_nextChunkX}: {height}h x {width}w");
-        BuildChunk(tileIds, idToChar, height, width);
+        bool needSpawn = !_playerSpawned && player != null;
+        if (needSpawn) _playerSpawned = true; // Mark now to prevent a double-spawn if another chunk arrives quickly
 
-        if (!_playerSpawned && player != null)
-        {
-            SpawnPlayer(tileIds, idToChar, height, width);
-            _playerSpawned = true;
-        }
-        _isGenerating = false;
+        Debug.Log($"[LevelInstantiator] Appending chunk at X={_nextChunkX}: {height}h x {width}w");
+        StartCoroutine(BuildChunkCoroutine(tileIds, idToChar, height, width, needSpawn));
+        // _isGenerating stays true; the coroutine clears it when done
     }
 
-    /// <summary>Destroy all previously spawned tiles.</summary>
+    /// <summary>Destroy all previously spawned tiles and clear the tracking lists.</summary>
     public void ClearLevel()
     {
-        foreach (Transform child in transform)
-            Destroy(child.gameObject);
+        foreach (var t in _activeTiles)
+        {
+            if (t != null) Destroy(t.gameObject);
+        }
+        _activeTiles.Clear();
+        _activeTileXs.Clear();
     }
 
-    private void BuildChunk(
+    /// <summary>
+    /// Builds a chunk incrementally over multiple frames to avoid a single
+    /// large stall.  At the end, calls <see cref="CompositeCollider2D.GenerateGeometry"/>
+    /// once rather than letting Unity rebuild the mesh on every tile addition.
+    /// </summary>
+    private IEnumerator BuildChunkCoroutine(
         int[][] tileIds,
         Dictionary<int, char> idToChar,
         int height,
-        int width)
+        int width,
+        bool spawnPlayer)
     {
         var stopwatch = Stopwatch.StartNew();
         int tilesSpawned = 0;
+        int frameBudgetUsed = 0;
+
+        // Record start X now so _nextChunkX can be advanced atomically at the end
+        float chunkStartX = _nextChunkX;
+
+        // Enemy spawns are deferred until after GenerateGeometry() so that the
+        // ground colliders exist when the enemies' Rigidbody2Ds first simulate.
+        // We store grid row/col so we can scan the tile data for the actual
+        // ground surface and position enemies precisely on top of it.
+        var pendingEnemies = new List<(GameObject prefab, int row, int col)>();
 
         for (int row = 0; row < height; row++)
         {
@@ -259,7 +324,14 @@ public class LevelInstantiator : MonoBehaviour
                 if (!_prefabMap.TryGetValue(ch, out GameObject prefab))
                     continue;
 
-                float x = _nextChunkX + (col * tileSize);
+                bool isEnemy = ch == 'E' || ch == 'g';
+                if (isEnemy)
+                {
+                    pendingEnemies.Add((prefab, row, col));
+                    continue;
+                }
+
+                float x = chunkStartX + (col * tileSize);
                 float y = (height - 1 - row) * tileSize;
 
                 GameObject tile = Instantiate(prefab,
@@ -267,17 +339,10 @@ public class LevelInstantiator : MonoBehaviour
                     Quaternion.identity,
                     transform);
 
-                tile.name = $"Tile_{ch}_{col}_{row}";
-
-                // Merge static terrain colliders into the parent
-                // CompositeCollider2D so adjacent tiles form one seamless
-                // surface — eliminates invisible "dead spot" seams.
-                // Skip dynamic objects (enemies, question blocks, coins, etc.)
-                // that need their own independent colliders.
-                bool isStaticTerrain = ch == '#' || ch == 'S' ||   // solid / brick
-                                       ch == '<' || ch == '>' ||   // pipe top
-                                       ch == '[' || ch == ']' ||   // pipe body
-                                       ch == '§';                  // compound pipe
+                bool isStaticTerrain = ch == '#' || ch == 'S' ||
+                                       ch == '<' || ch == '>' ||
+                                       ch == '[' || ch == ']' ||
+                                       ch == '§';
                 if (isStaticTerrain)
                 {
                     BoxCollider2D bc = tile.GetComponent<BoxCollider2D>();
@@ -285,12 +350,94 @@ public class LevelInstantiator : MonoBehaviour
                         bc.compositeOperation = Collider2D.CompositeOperation.Merge;
                 }
 
+                _activeTiles.Add(tile.transform);
+                _activeTileXs.Add(x); // cache world-X so CleanupOldTiles never reads Transform.position
                 tilesSpawned++;
+                frameBudgetUsed++;
+
+                if (frameBudgetUsed >= tilesPerFrameBudget)
+                {
+                    frameBudgetUsed = 0;
+                    yield return null; // spread work across frames
+                }
             }
         }
 
-        // Move the offset forward for the next chunk
-        _nextChunkX += width * tileSize;
+        // Single geometry rebuild now that all tiles are placed.
+        // This replaces ~350 incremental rebuilds that Synchronous mode would have done.
+        if (_composite != null)
+            _composite.GenerateGeometry();
+
+        // Make sure the rebuilt CompositeCollider2D is visible to overlap
+        // queries before we spawn enemies.
+        Physics2D.SyncTransforms();
+
+        foreach (var (enemyPrefab, enemyRow, enemyCol) in pendingEnemies)
+        {
+            float x = chunkStartX + (enemyCol * tileSize);
+            float y = (height - 1 - enemyRow) * tileSize;
+
+            GameObject enemy = Instantiate(enemyPrefab, new Vector3(x, y, 0f), Quaternion.identity);
+
+            // Compute the final spawn Y before touching the enemy's transform or
+            // Rigidbody2D.  Moving transform.position while a Rigidbody2D is active
+            // doesn't move the physics body — on the next FixedUpdate it snaps back.
+            // Instead we calculate the correct Y here and write it once to both.
+            Collider2D enemyCollider = enemy.GetComponent<Collider2D>();
+            if (enemyCollider != null && groundLayer.value != 0)
+            {
+                // Read collider geometry from the component directly — bounds.center
+                // can lag after a fresh Instantiate if physics hasn't synced yet.
+                Vector2 colOffset;
+                Vector2 colSize;
+                if (enemyCollider is CircleCollider2D circ)
+                {
+                    colOffset = circ.offset;
+                    colSize   = new Vector2(circ.radius * 2f, circ.radius * 2f);
+                }
+                else if (enemyCollider is BoxCollider2D box2)
+                {
+                    colOffset = box2.offset;
+                    colSize   = box2.size;
+                }
+                else
+                {
+                    colOffset = enemyCollider.offset;
+                    colSize   = enemyCollider.bounds.size;
+                }
+
+                float finalY = y;
+                float step   = tileSize * 0.25f;
+
+                for (int attempts = 0; attempts < 20; attempts++)
+                {
+                    // Build the query center from our local finalY — no transform
+                    // reads, so there is no stale-physics-state risk.
+                    Vector2 queryCenter = new Vector2(x + colOffset.x, finalY + colOffset.y);
+
+                    if (Physics2D.OverlapBox(queryCenter, colSize * 0.95f, 0f, groundLayer) == null)
+                        break;
+
+                    finalY += step;
+                }
+
+                // Write the resolved position to both transform and Rigidbody2D so
+                // the physics body starts from the correct location on its first step.
+                enemy.transform.position = new Vector3(x, finalY, 0f);
+                var rb = enemy.GetComponent<Rigidbody2D>();
+                if (rb != null)
+                    rb.position = new Vector2(x, finalY);
+            }
+
+            _activeTiles.Add(enemy.transform);
+            _activeTileXs.Add(x);
+            tilesSpawned++;
+        }
+
+        _nextChunkX = chunkStartX + width * tileSize;
+
+        if (spawnPlayer)
+            SpawnPlayer(tileIds, idToChar, height, width);
 
         stopwatch.Stop();
         float buildTimeMs = (float)stopwatch.Elapsed.TotalMilliseconds;
@@ -299,41 +446,29 @@ public class LevelInstantiator : MonoBehaviour
                   $"Next chunk starts at X={_nextChunkX}");
 
         OnChunkBuilt?.Invoke(buildTimeMs, tilesSpawned);
+        _isGenerating = false;
     }
 
     private void SpawnPlayer(int[][] tileIds, Dictionary<int, char> idToChar, int height, int width)
     {
-        // Scan the first few columns to find a safe spawn point.
-        // A safe spawn = a solid ground tile with at least 2 empty rows above it
-        // (so the player has room to stand without overlapping any collider).
         for (int col = 0; col < Mathf.Min(5, width); col++)
         {
-            // Scan top-down to find the ground surface
             for (int row = 0; row < height; row++)
             {
                 if (IsEmpty(tileIds, idToChar, row, col)) continue;
 
-                // row is the first solid tile from the top (ground surface).
-                // Verify the two rows above it are clear (player needs headroom).
-                int spawnRow = row - 1;  // one tile above the surface
+                int spawnRow = row - 1;
                 if (spawnRow < 0) continue;
 
                 bool aboveClear = IsEmpty(tileIds, idToChar, spawnRow, col);
                 bool twoClear   = spawnRow - 1 < 0 || IsEmpty(tileIds, idToChar, spawnRow - 1, col);
 
                 if (!aboveClear || !twoClear)
-                {
-                    // Not enough headroom in this column, try the next one
                     break;
-                }
 
-                // Safe spawn position: one tile above the ground surface
                 float x = col * tileSize;
                 float y = (height - 1 - spawnRow) * tileSize + 0.05f;
 
-                // Use Rigidbody2D.position for teleporting — setting only
-                // transform.position can desync from the physics body for one
-                // frame, causing the "stuck in collider" bug.
                 var rb = player.GetComponent<Rigidbody2D>();
                 if (rb != null)
                 {
@@ -348,7 +483,6 @@ public class LevelInstantiator : MonoBehaviour
             }
         }
 
-        // Fallback: top-left corner
         player.transform.position = new Vector3(0f, height * tileSize, 0f);
         Debug.LogWarning("[LevelInstantiator] No safe spawn found, using fallback.");
     }
@@ -370,14 +504,47 @@ public class LevelInstantiator : MonoBehaviour
         return idToChar.TryGetValue(tileIds[row][col], out char ch) ? ch : '?';
     }
 
+    /// <summary>
+    /// Destroys tiles that have scrolled far enough behind the player.
+    ///
+    /// Performance design:
+    /// 1. Movement-gated: the loop is skipped entirely unless the player has
+    ///    moved at least <see cref="CleanupMoveThreshold"/> units since the
+    ///    last pass, which is true on most frames while standing still or
+    ///    moving slowly.
+    /// 2. No Transform reads: tile world-X values are compared from the
+    ///    pre-cached <see cref="_activeTileXs"/> float list.  Reading
+    ///    Transform.position for every tile every frame stalls the main
+    ///    thread while physics jobs are running (the player's Rigidbody2D
+    ///    being active is enough to trigger this), causing a hard FPS drop
+    ///    on the frame movement starts.
+    /// </summary>
     private void CleanupOldTiles()
     {
-        float cutoff = player.transform.position.x - destroyBehindDistance;
-        foreach (Transform child in transform)
+        float playerX = _playerRb != null ? _playerRb.position.x : player.transform.position.x;
+
+        // Skip the loop if the player hasn't moved enough since last pass.
+        if (Mathf.Abs(playerX - _lastCleanupPlayerX) < CleanupMoveThreshold) return;
+        _lastCleanupPlayerX = playerX;
+
+        float cutoff = playerX - destroyBehindDistance;
+
+        // Swap-and-pop: move the last element into the removed slot instead of
+        // shifting all elements above i down.  Safe here because (a) we iterate
+        // backwards so every element at index > i was already processed without
+        // removal, and (b) tile order in the list has no gameplay meaning.
+        for (int i = _activeTiles.Count - 1; i >= 0; i--)
         {
-            if (child.position.x < cutoff)
-                Destroy(child.gameObject);
+            if (_activeTileXs[i] < cutoff)
+            {
+                if (_activeTiles[i] != null) Destroy(_activeTiles[i].gameObject);
+
+                int last = _activeTiles.Count - 1;
+                _activeTiles[i]  = _activeTiles[last];
+                _activeTileXs[i] = _activeTileXs[last];
+                _activeTiles.RemoveAt(last);
+                _activeTileXs.RemoveAt(last);
+            }
         }
     }
-
 }
