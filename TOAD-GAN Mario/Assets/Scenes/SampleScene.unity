@@ -151,7 +151,7 @@ MonoBehaviour:
   modelAsset: {fileID: 5022602860645237092, guid: 86ef310854712aa418195b6168b4ab1b, type: 3}
   preferredBackend: 512
   temperature: 1
-  scaleW: 1
+  scaleW: 0.5
   scaleH: 1
   generateOnStart: 0
 --- !u!4 &40915848
@@ -397,7 +397,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CameraFollow
   target: {fileID: 1050479137}
   offset: {x: 0, y: 2, z: -10}
-  smoothSpeed: 5
+  smoothTime: 0.08
 --- !u!1 &619394800
 GameObject:
   m_ObjectHideFlags: 0
@@ -547,7 +547,7 @@ MonoBehaviour:
   fpsDropWarningThreshold: 30
   toggleKey: 96
   showOnStart: 1
-  enableCsvLogging: 0
+  enableCsvLogging: 1
   csvLogInterval: 1
 --- !u!1 &845917879
 GameObject:
