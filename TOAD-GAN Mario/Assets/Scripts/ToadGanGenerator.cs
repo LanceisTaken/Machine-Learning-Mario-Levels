@@ -89,6 +89,42 @@ public class ToadGanGenerator : MonoBehaviour
     private readonly HashSet<int> _pipeIds   = new HashSet<int>();
     private readonly List<int>    _luckyRows = new List<int>();
 
+    // ── Reusable generation buffers ──────────────────────────────────────
+    // These fields are allocated once (or resized only when generation
+    // parameters change) and reused across Generate() calls.  The noise
+    // backing arrays are the largest — potentially several MB total for a
+    // multi-scale GAN — so recycling them avoids per-chunk GC pressure that
+    // would otherwise trigger periodic frame-rate hitches.
+
+    /// <summary>Reused across calls — avoids a Stopwatch heap allocation per Generate().</summary>
+    private readonly Stopwatch _stopwatch = new Stopwatch();
+
+    /// <summary>
+    /// Single-element backing array for the temperature scalar tensor.
+    /// Reused to avoid a trivial but unnecessary per-call array allocation.
+    /// </summary>
+    private readonly float[] _tempScalarBuf = new float[1];
+
+    /// <summary>
+    /// Per-scale noise float[] buffers.  Each buffer is filled with fresh
+    /// Box-Muller random values every Generate() call but is only
+    /// reallocated when the required element count changes (i.e. scaleH or
+    /// scaleW was modified between calls).  For a typical 5-scale model
+    /// these buffers total ~1-3 MB — reusing them eliminates the single
+    /// largest source of managed allocations in the generation pipeline.
+    /// </summary>
+    private float[][] _noiseBuffers;
+
+    /// <summary>Current element count of each entry in <see cref="_noiseBuffers"/>.</summary>
+    private int[] _noiseLengths;
+
+    /// <summary>
+    /// Reusable container for the per-scale Tensor objects passed to the
+    /// worker.  The array itself is cached; its elements are overwritten
+    /// each call and disposed after inference completes.
+    /// </summary>
+    private Tensor<float>[] _noiseTensorRefs;
+
     // ── Unity lifecycle ───────────────────────────────────────────────────
 
     private void Start()
@@ -113,6 +149,7 @@ public class ToadGanGenerator : MonoBehaviour
 
     private void OnDestroy()
     {
+        DisposeNoiseTensors();
         _worker?.Dispose();
     }
 
@@ -133,23 +170,24 @@ public class ToadGanGenerator : MonoBehaviour
         }
 
         OnGenerationStarted?.Invoke();
-        var stopwatch = Stopwatch.StartNew();
+        _stopwatch.Restart();
 
-        Tensor<float>[] noiseTensors = null;
         Tensor<float> temperatureTensor = null;
         Tensor<float> cpuOutput = null;
 
         try
         {
-            // temperature scalar — first ONNX input
-            temperatureTensor = new Tensor<float>(new TensorShape(), new[] { temperature });
+            // Temperature scalar — reuses _tempScalarBuf (no array allocation).
+            _tempScalarBuf[0] = temperature;
+            temperatureTensor = new Tensor<float>(new TensorShape(), _tempScalarBuf);
             _worker.SetInput("temperature", temperatureTensor);
 
-            // per-scale noise tensors, sized by scaleH / scaleW
-            noiseTensors = BuildNoiseTensors(scaleH, scaleW);
+            // Per-scale noise tensors — backing float[] arrays are reused via
+            // _noiseBuffers; only the lightweight Tensor wrappers are new.
+            BuildNoiseTensors(scaleH, scaleW);
 
             for (int s = 0; s < _meta.num_scales; s++)
-                _worker.SetInput(_meta.input_names[s + 1], noiseTensors[s]);
+                _worker.SetInput(_meta.input_names[s + 1], _noiseTensorRefs[s]);
 
             _worker.Schedule();
 
@@ -160,15 +198,17 @@ public class ToadGanGenerator : MonoBehaviour
             int height   = cpuOutput.shape[2];
             int width    = cpuOutput.shape[3];
 
+            // ArgmaxChannels must allocate a fresh int[][] each call because
+            // the consumer (LevelInstantiator) holds the reference across
+            // multiple frames in a coroutine.
             int[][] tileIds = ArgmaxChannels(cpuOutput, channels, height, width);
 
-            // Post-processing passes matching generate.py / server.py
             FixPipes(tileIds, height, width);
             FixBlocksOnPipes(tileIds, height, width);
             FixLuckyBlocks(tileIds, height, width);
 
-            stopwatch.Stop();
-            float durationMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+            _stopwatch.Stop();
+            float durationMs = (float)_stopwatch.Elapsed.TotalMilliseconds;
 
             Debug.Log($"[ToadGanGenerator] Generated {height}×{width} tile grid " +
                       $"({channels} token channels) in {durationMs:F1} ms.");
@@ -178,7 +218,7 @@ public class ToadGanGenerator : MonoBehaviour
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            _stopwatch.Stop();
             string msg = $"[ToadGanGenerator] Inference failed: {ex.Message}";
             Debug.LogError(msg);
             OnError?.Invoke(msg);
@@ -186,11 +226,7 @@ public class ToadGanGenerator : MonoBehaviour
         finally
         {
             temperatureTensor?.Dispose();
-
-            if (noiseTensors != null)
-                foreach (var t in noiseTensors)
-                    t?.Dispose();
-
+            DisposeNoiseTensors();
             cpuOutput?.Dispose();
         }
     }
@@ -244,15 +280,30 @@ public class ToadGanGenerator : MonoBehaviour
 
     // ── Noise generation ──────────────────────────────────────────────────
 
-    private Tensor<float>[] BuildNoiseTensors(float scaleHeight, float scaleWidth)
+    /// <summary>
+    /// Populates <see cref="_noiseTensorRefs"/> with one noise tensor per
+    /// scale.  The backing <c>float[]</c> arrays in <see cref="_noiseBuffers"/>
+    /// are reused across calls — only reallocated when the required element
+    /// count changes (e.g. after a scaleH/scaleW tweak in the Inspector).
+    /// The <see cref="Tensor{T}"/> wrappers must be freshly constructed each
+    /// call because Sentis copies the data on creation and the Worker holds a
+    /// native reference until the next Schedule.
+    /// </summary>
+    private void BuildNoiseTensors(float scaleHeight, float scaleWidth)
     {
-        var tensors = new Tensor<float>[_meta.num_scales];
+        int numScales = _meta.num_scales;
 
-        for (int s = 0; s < _meta.num_scales; s++)
+        if (_noiseBuffers == null || _noiseBuffers.Length != numScales)
+        {
+            _noiseBuffers    = new float[numScales][];
+            _noiseLengths    = new int[numScales];
+            _noiseTensorRefs = new Tensor<float>[numScales];
+        }
+
+        for (int s = 0; s < numScales; s++)
         {
             int[] baseShape = _meta.pyramid_shapes[s];
 
-            // Apply scale multipliers to match generate.py's scale_h / scale_w logic
             int b = baseShape[0];
             int c = baseShape[1];
             int h = Mathf.Max(1, Mathf.RoundToInt(baseShape[2] * scaleHeight));
@@ -261,17 +312,38 @@ public class ToadGanGenerator : MonoBehaviour
             var tensorShape = new TensorShape(b, c, h, w);
             int length = b * c * h * w;
 
-            float[] data = GaussianNoise(length);
-            tensors[s] = new Tensor<float>(tensorShape, data);
-        }
+            // Resize only when the required element count has changed.
+            if (_noiseBuffers[s] == null || _noiseLengths[s] != length)
+            {
+                _noiseBuffers[s] = new float[length];
+                _noiseLengths[s] = length;
+            }
 
-        return tensors;
+            FillGaussianNoise(_noiseBuffers[s], length);
+            _noiseTensorRefs[s] = new Tensor<float>(tensorShape, _noiseBuffers[s]);
+        }
     }
 
-    /// <summary>Box-Muller transform to sample from N(0,1).</summary>
-    private static float[] GaussianNoise(int count)
+    /// <summary>
+    /// Dispose every tensor in <see cref="_noiseTensorRefs"/> and null
+    /// the slots so stale references are never reused.
+    /// </summary>
+    private void DisposeNoiseTensors()
     {
-        var buf = new float[count];
+        if (_noiseTensorRefs == null) return;
+        for (int i = 0; i < _noiseTensorRefs.Length; i++)
+        {
+            _noiseTensorRefs[i]?.Dispose();
+            _noiseTensorRefs[i] = null;
+        }
+    }
+
+    /// <summary>
+    /// Box-Muller transform — fills <paramref name="buf"/> in-place with
+    /// N(0,1) samples.  No heap allocation.
+    /// </summary>
+    private static void FillGaussianNoise(float[] buf, int count)
+    {
         for (int i = 0; i < count; i += 2)
         {
             float u1 = UnityEngine.Random.Range(float.Epsilon, 1f);
@@ -283,7 +355,6 @@ public class ToadGanGenerator : MonoBehaviour
             if (i + 1 < count)
                 buf[i + 1] = r * Mathf.Sin(th);
         }
-        return buf;
     }
 
     // ── Post-processing ───────────────────────────────────────────────────

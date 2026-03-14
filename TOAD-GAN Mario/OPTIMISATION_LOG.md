@@ -325,13 +325,77 @@ Eliminates ~4,000–4,800 managed string allocations/second from the HUD overlay
 
 ---
 
+## Session 4 — 2026-03-14
+
+**Focus**: Eliminate per-generation managed heap allocations inside `ToadGanGenerator.Generate()` (addresses F-03).
+
+---
+
+### OPT-12 · `ToadGanGenerator` — Reuse noise backing float[] buffers across Generate() calls
+
+**File**: `Assets/Scripts/ToadGanGenerator.cs`
+
+**Problem**  
+Every `Generate()` call allocated several large `float[]` arrays via
+`GaussianNoise()` — one per GAN scale — to hold the random noise data
+passed to the ONNX model.  For a typical 5-scale model with shapes like
+`[1, 32, 16, 224]`, each scale's buffer is ~450 KB; the total across all
+scales reaches **1–3 MB of managed heap allocated and immediately discarded
+every chunk**.  Because chunks are generated frequently during gameplay
+(every few seconds as the player advances), these arrays were a steady
+source of GC pressure that would eventually trigger collection pauses.
+
+Additionally, each call allocated a `new float[1]` for the temperature
+scalar, a `new Tensor<float>[]` container array, and a `new Stopwatch`,
+none of which needed to be fresh each time.
+
+**Fix**  
+Introduced the following reusable fields:
+
+| Field | Purpose |
+|---|---|
+| `_stopwatch` | `Stopwatch` instance, `.Restart()`ed each call |
+| `_tempScalarBuf` | `float[1]` backing the temperature scalar tensor |
+| `_noiseBuffers` / `_noiseLengths` | Per-scale `float[]` arrays, resized only when `scaleH`/`scaleW` change |
+| `_noiseTensorRefs` | Container array for `Tensor<float>` references |
+
+`GaussianNoise(int count)` (which returned a new array) was replaced with
+`FillGaussianNoise(float[] buf, int count)` which fills the existing buffer
+in-place — zero allocation.
+
+A `DisposeNoiseTensors()` helper nulls out and disposes all tensor
+references safely, called both in the `finally` block of `Generate()` and
+in `OnDestroy()` to prevent leaks.
+
+The `Tensor<float>` wrapper objects themselves are still freshly constructed
+each call because Unity Sentis copies the backing data on construction and
+the Worker holds a native reference until the next `Schedule()`.  Only the
+lightweight native tensor wrappers are new; the multi-MB managed arrays
+backing them are recycled.
+
+**Impact**  
+Eliminates ~1–3 MB of managed heap allocations per `Generate()` call.
+At one chunk every ~5 seconds, this removes ~200–600 KB/s of steady GC
+pressure that was previously invisible between chunk builds.
+
+**Remaining per-generation allocations (unavoidable)**:
+
+| Allocation | Reason |
+|---|---|
+| `new Tensor<float>(shape, data)` per scale + temperature | Sentis API requires fresh tensor objects; they wrap native GPU memory and the Worker holds internal references |
+| `ReadbackAndClone()` output tensor | Each generation produces unique output; no way to reuse |
+| `int[][] tileIds` (ArgmaxChannels) | The consumer (`LevelInstantiator`) holds this reference across multiple frames in a coroutine — cannot be pooled without a complex borrow protocol |
+| `TensorShape` structs | Value types, stack-allocated — zero heap cost |
+
+---
+
 ## Future Work / Candidates
 
 | ID | Area | Idea | Priority |
 |---|---|---|---|
 | F-01 | `LevelInstantiator` | Tile GameObject pooling — reuse destroyed tiles instead of Instantiate/Destroy | High |
 | F-02 | `LevelInstantiator` | Batch `CleanupOldTiles` destructions (max N per frame) to smooth long cleanup frames | Medium |
-| F-03 | `ToadGanGenerator` | Reuse pre-allocated `float[]` noise buffers across `Generate()` calls | Low |
+| ~~F-03~~ | ~~`ToadGanGenerator`~~ | ~~Reuse pre-allocated `float[]` noise buffers across `Generate()` calls~~ | ~~Done (OPT-12)~~ |
 | F-04 | `EnemyPatrol` | Use `Physics2D.RaycastNonAlloc` buffer; currently raycasts return structs (already zero-alloc in Unity 2021+, verify) | Low |
 | F-05 | General | Strip `Debug.Log` calls from hot paths in release builds using `[Conditional("UNITY_EDITOR")]` or a custom logger | Medium |
 | F-06 | `ToadGanGenerator` | Investigate Unity Sentis async scheduling to move ONNX inference off the main thread | High |
