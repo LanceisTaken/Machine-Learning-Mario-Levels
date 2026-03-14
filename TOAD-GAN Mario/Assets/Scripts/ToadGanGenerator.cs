@@ -1,6 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using UnityEngine;
 using Unity.InferenceEngine;
@@ -10,17 +12,20 @@ using Stopwatch = System.Diagnostics.Stopwatch;
 /// Runs the TOAD-GAN multi-scale generation pipeline locally via Unity Sentis
 /// (com.unity.ai.inference) — no Python server required.
 ///
+/// All ML inference and data processing run off the main thread:
+///   Phase 1  – Noise tensor data built on a thread-pool thread (System.Random).
+///   Phase 2  – Tensor creation, SetInput, Schedule on the main thread (fast GPU dispatch).
+///   Phase 3  – Non-blocking async readback polled each frame (ReadbackRequest / IsReadbackRequestDone).
+///   Phase 4  – Argmax + post-processing on a thread-pool thread.
+///   Phase 5  – Result delivered to subscribers on the main thread.
+///
 /// Setup
 /// -----
 /// 1. Attach to any GameObject.
 /// 2. Drag the imported toadgan.onnx asset onto <see cref="modelAsset"/> in
 ///    the Inspector, OR leave it null to auto-load from StreamingAssets.
-/// 3. Call <see cref="Generate"/> (or set <see cref="generateOnStart"/>).
+/// 3. Call <see cref="RequestGeneration"/> (or set <see cref="generateOnStart"/>).
 /// 4. Subscribe to <see cref="OnLevelGenerated"/> to receive the tile grid.
-///
-/// The component reads pyramid shapes and vocab from the JSON sidecar files
-/// that <c>export_onnx.py</c> placed alongside the ONNX model in
-/// <c>StreamingAssets/TOADGAN/</c>.
 /// </summary>
 public class ToadGanGenerator : MonoBehaviour
 {
@@ -84,10 +89,51 @@ public class ToadGanGenerator : MonoBehaviour
     private Dictionary<string, int> _charToId;      // stoi: char → id
     private bool _ready;
 
-    // Reusable collections for post-processing passes.  Allocated once and
-    // cleared before each use so chunk generation does not produce GC garbage.
-    private readonly HashSet<int> _pipeIds   = new HashSet<int>();
-    private readonly List<int>    _luckyRows = new List<int>();
+    // ── Async generation infrastructure ───────────────────────────────────
+
+    /// <summary>FIFO queue of generation requests waiting to be processed.</summary>
+    private readonly Queue<GenerationJob> _pendingJobs = new Queue<GenerationJob>();
+
+    /// <summary>The job currently being processed (null when idle).</summary>
+    private GenerationJob _activeJob;
+
+    /// <summary>Handle to the active processing coroutine for cleanup.</summary>
+    private Coroutine _activeCoroutine;
+
+    /// <summary>Number of pending generation requests in the queue.</summary>
+    public int PendingJobCount => _pendingJobs.Count;
+
+    /// <summary>True if a generation job is currently being processed.</summary>
+    public bool IsProcessing => _activeJob != null;
+
+    /// <summary>
+    /// Number of frames the last async readback polled before the GPU result
+    /// was ready.  Zero means the GPU finished within one frame.
+    /// </summary>
+    public int LastAsyncPollFrames { get; private set; }
+
+    /// <summary>
+    /// True if the last generation had to fall back to a blocking readback
+    /// because the async API was unavailable.
+    /// </summary>
+    public bool LastJobBlockedMainThread { get; private set; }
+
+    /// <summary>
+    /// Cumulative count of generations that required a blocking main-thread
+    /// readback (ideally stays at zero).
+    /// </summary>
+    public int TotalBlockedCount { get; private set; }
+
+    // ── Job data class ────────────────────────────────────────────────────
+
+    public class GenerationJob
+    {
+        public int   ChunkIndex;
+        public int   Seed;   // -1 = use a random seed
+        public float Temperature;
+        public float ScaleW;
+        public float ScaleH;
+    }
 
     // ── Unity lifecycle ───────────────────────────────────────────────────
 
@@ -108,21 +154,35 @@ public class ToadGanGenerator : MonoBehaviour
         }
 
         if (generateOnStart)
-            Generate();
+            RequestGeneration();
+    }
+
+    private void Update()
+    {
+        if (_activeJob == null && _pendingJobs.Count > 0)
+        {
+            _activeJob = _pendingJobs.Dequeue();
+            _activeCoroutine = StartCoroutine(ProcessJobCoroutine(_activeJob));
+        }
     }
 
     private void OnDestroy()
     {
+        if (_activeCoroutine != null)
+            StopCoroutine(_activeCoroutine);
         _worker?.Dispose();
     }
 
     // ── Public API ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Run one full multi-scale generation pass and raise
-    /// <see cref="OnLevelGenerated"/> with the resulting tile grid.
+    /// Enqueue a non-blocking generation request.  The result arrives via
+    /// <see cref="OnLevelGenerated"/>.  Multiple requests are processed in
+    /// FIFO order, one at a time.
     /// </summary>
-    public void Generate()
+    /// <param name="chunkIndex">Optional chunk index for tracking.</param>
+    /// <param name="seed">RNG seed for reproducibility; -1 = random.</param>
+    public void RequestGeneration(int chunkIndex = -1, int seed = -1)
     {
         if (!_ready)
         {
@@ -132,66 +192,192 @@ public class ToadGanGenerator : MonoBehaviour
             return;
         }
 
-        OnGenerationStarted?.Invoke();
-        var stopwatch = Stopwatch.StartNew();
+        _pendingJobs.Enqueue(new GenerationJob
+        {
+            ChunkIndex  = chunkIndex,
+            Seed        = seed,
+            Temperature = temperature,
+            ScaleW      = scaleW,
+            ScaleH      = scaleH
+        });
+    }
 
-        Tensor<float>[] noiseTensors = null;
-        Tensor<float> temperatureTensor = null;
-        Tensor<float> cpuOutput = null;
+    /// <summary>
+    /// Backward-compatible entry point.  Calls <see cref="RequestGeneration"/>
+    /// with default parameters so existing callers keep working.
+    /// </summary>
+    public void Generate() => RequestGeneration();
+
+    // ── Async processing coroutine ────────────────────────────────────────
+
+    private IEnumerator ProcessJobCoroutine(GenerationJob job)
+    {
+        OnGenerationStarted?.Invoke();
+        var sw = Stopwatch.StartNew();
+        int  pollFrames = 0;
+        bool didBlock   = false;
+
+        Tensor<float>[] noiseTensors     = null;
+        Tensor<float>   temperatureTensor = null;
+        Tensor<float>   outputRef        = null;
+        bool            asyncOk          = true;
+
+        // ── Phase 1: Build noise data on a thread-pool thread ────
+        // (yield must be outside try-catch per C# CS1626)
+        float[][] noiseData   = null;
+        int[][]   noiseShapes = null;
+
+        var noiseTask = Task.Run(() =>
+        {
+            var rng = job.Seed >= 0
+                ? new System.Random(job.Seed)
+                : new System.Random();
+            BuildNoiseDataThreadSafe(
+                rng, job.ScaleH, job.ScaleW,
+                out noiseData, out noiseShapes);
+        });
+
+        while (!noiseTask.IsCompleted)
+            yield return null;
 
         try
         {
-            // temperature scalar — first ONNX input
-            temperatureTensor = new Tensor<float>(new TensorShape(), new[] { temperature });
+            if (noiseTask.IsFaulted)
+                throw noiseTask.Exception?.InnerException ?? noiseTask.Exception;
+
+            // ── Phase 2: Create tensors & schedule (main thread, fast) ──
+            temperatureTensor = new Tensor<float>(
+                new TensorShape(), new[] { job.Temperature });
             _worker.SetInput("temperature", temperatureTensor);
 
-            // per-scale noise tensors, sized by scaleH / scaleW
-            noiseTensors = BuildNoiseTensors(scaleH, scaleW);
-
+            noiseTensors = new Tensor<float>[_meta.num_scales];
             for (int s = 0; s < _meta.num_scales; s++)
+            {
+                int[] ns = noiseShapes[s];
+                var shape = new TensorShape(ns[0], ns[1], ns[2], ns[3]);
+                noiseTensors[s] = new Tensor<float>(shape, noiseData[s]);
                 _worker.SetInput(_meta.input_names[s + 1], noiseTensors[s]);
+            }
 
             _worker.Schedule();
 
-            var outputRef = _worker.PeekOutput(_meta.output_name) as Tensor<float>;
-            cpuOutput = outputRef.ReadbackAndClone();
+            outputRef = _worker.PeekOutput(_meta.output_name) as Tensor<float>;
+            try
+            {
+                outputRef.ReadbackRequest();
+            }
+            catch
+            {
+                asyncOk = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            Debug.LogError($"[ToadGanGenerator] Inference failed: {ex.Message}");
+            OnError?.Invoke(ex.Message);
+            _activeJob       = null;
+            _activeCoroutine = null;
+            temperatureTensor?.Dispose();
+            if (noiseTensors != null)
+                foreach (var t in noiseTensors) t?.Dispose();
+            yield break;
+        }
 
-            int channels = cpuOutput.shape[1];
-            int height   = cpuOutput.shape[2];
-            int width    = cpuOutput.shape[3];
+        // ── Phase 3: Non-blocking async readback (yield outside try-catch) ──
+        if (asyncOk)
+        {
+            while (!outputRef.IsReadbackRequestDone())
+            {
+                pollFrames++;
+                yield return null;
+            }
+        }
+        else
+        {
+            yield return null;
+            didBlock = true;
+        }
 
-            int[][] tileIds = ArgmaxChannels(cpuOutput, channels, height, width);
+        int channels = outputRef.shape[1];
+        int height   = outputRef.shape[2];
+        int width    = outputRef.shape[3];
 
-            // Post-processing passes matching generate.py / server.py
-            FixPipes(tileIds, height, width);
-            FixBlocksOnPipes(tileIds, height, width);
-            FixLuckyBlocks(tileIds, height, width);
+        float[] rawOutput = null;
+        try
+        {
+            rawOutput = outputRef.DownloadToArray();
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            Debug.LogError($"[ToadGanGenerator] Readback failed: {ex.Message}");
+            OnError?.Invoke(ex.Message);
+            _activeJob       = null;
+            _activeCoroutine = null;
+            temperatureTensor?.Dispose();
+            if (noiseTensors != null)
+                foreach (var t in noiseTensors) t?.Dispose();
+            yield break;
+        }
 
-            stopwatch.Stop();
-            float durationMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+        temperatureTensor?.Dispose();
+        temperatureTensor = null;
+        for (int s = 0; s < (noiseTensors?.Length ?? 0); s++)
+        {
+            noiseTensors[s]?.Dispose();
+            noiseTensors[s] = null;
+        }
+        noiseTensors = null;
+
+        // ── Phase 4: Argmax + post-processing on background thread ──
+        int[][] tileIds  = null;
+        var     charToId = _charToId;
+
+        var postTask = Task.Run(() =>
+        {
+            tileIds = ArgmaxChannelsFromArray(
+                rawOutput, channels, height, width);
+            FixPipesStatic(tileIds, height, width, charToId);
+            FixBlocksOnPipesStatic(tileIds, height, width, charToId);
+            FixLuckyBlocksStatic(tileIds, height, width, charToId);
+        });
+
+        while (!postTask.IsCompleted)
+            yield return null;
+
+        try
+        {
+            if (postTask.IsFaulted)
+                throw postTask.Exception?.InnerException ?? postTask.Exception;
+
+            sw.Stop();
+            float durationMs = (float)sw.Elapsed.TotalMilliseconds;
+
+            LastAsyncPollFrames      = pollFrames;
+            LastJobBlockedMainThread = didBlock;
+            if (didBlock) TotalBlockedCount++;
 
             Debug.Log($"[ToadGanGenerator] Generated {height}×{width} tile grid " +
-                      $"({channels} token channels) in {durationMs:F1} ms.");
+                      $"({channels} channels) in {durationMs:F1} ms " +
+                      $"[async: {pollFrames} poll frames, blocked={didBlock}]");
 
             OnLevelGenerated?.Invoke(tileIds, _tileMap, height, width);
             OnGenerationCompleted?.Invoke(durationMs);
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
-            string msg = $"[ToadGanGenerator] Inference failed: {ex.Message}";
-            Debug.LogError(msg);
-            OnError?.Invoke(msg);
+            sw.Stop();
+            Debug.LogError($"[ToadGanGenerator] Post-process failed: {ex.Message}");
+            OnError?.Invoke(ex.Message);
         }
         finally
         {
             temperatureTensor?.Dispose();
-
             if (noiseTensors != null)
-                foreach (var t in noiseTensors)
-                    t?.Dispose();
-
-            cpuOutput?.Dispose();
+                foreach (var t in noiseTensors) t?.Dispose();
+            _activeJob       = null;
+            _activeCoroutine = null;
         }
     }
 
@@ -242,58 +428,56 @@ public class ToadGanGenerator : MonoBehaviour
         }
     }
 
-    // ── Noise generation ──────────────────────────────────────────────────
+    // ── Thread-safe noise generation ──────────────────────────────────────
+    // Uses System.Random + System.Math so it can run on any thread.
 
-    private Tensor<float>[] BuildNoiseTensors(float scaleHeight, float scaleWidth)
+    private void BuildNoiseDataThreadSafe(
+        System.Random rng, float scaleHeight, float scaleWidth,
+        out float[][] noiseData, out int[][] noiseShapes)
     {
-        var tensors = new Tensor<float>[_meta.num_scales];
+        noiseData   = new float[_meta.num_scales][];
+        noiseShapes = new int[_meta.num_scales][];
 
         for (int s = 0; s < _meta.num_scales; s++)
         {
             int[] baseShape = _meta.pyramid_shapes[s];
-
-            // Apply scale multipliers to match generate.py's scale_h / scale_w logic
             int b = baseShape[0];
             int c = baseShape[1];
-            int h = Mathf.Max(1, Mathf.RoundToInt(baseShape[2] * scaleHeight));
-            int w = Mathf.Max(1, Mathf.RoundToInt(baseShape[3] * scaleWidth));
+            int h = Math.Max(1, (int)Math.Round(baseShape[2] * (double)scaleHeight));
+            int w = Math.Max(1, (int)Math.Round(baseShape[3] * (double)scaleWidth));
 
-            var tensorShape = new TensorShape(b, c, h, w);
-            int length = b * c * h * w;
-
-            float[] data = GaussianNoise(length);
-            tensors[s] = new Tensor<float>(tensorShape, data);
+            noiseShapes[s] = new[] { b, c, h, w };
+            noiseData[s]   = GaussianNoiseThreadSafe(rng, b * c * h * w);
         }
-
-        return tensors;
     }
 
-    /// <summary>Box-Muller transform to sample from N(0,1).</summary>
-    private static float[] GaussianNoise(int count)
+    /// <summary>Box-Muller transform using System.Random (thread-safe).</summary>
+    private static float[] GaussianNoiseThreadSafe(System.Random rng, int count)
     {
         var buf = new float[count];
         for (int i = 0; i < count; i += 2)
         {
-            float u1 = UnityEngine.Random.Range(float.Epsilon, 1f);
-            float u2 = UnityEngine.Random.Range(0f, 1f);
-            float r  = Mathf.Sqrt(-2f * Mathf.Log(u1));
-            float th = 2f * Mathf.PI * u2;
+            double u1 = rng.NextDouble();
+            if (u1 < 1e-10) u1 = 1e-10;
+            double u2 = rng.NextDouble();
+            double r  = Math.Sqrt(-2.0 * Math.Log(u1));
+            double th = 2.0 * Math.PI * u2;
 
-            buf[i] = r * Mathf.Cos(th);
+            buf[i] = (float)(r * Math.Cos(th));
             if (i + 1 < count)
-                buf[i + 1] = r * Mathf.Sin(th);
+                buf[i + 1] = (float)(r * Math.Sin(th));
         }
         return buf;
     }
 
-    // ── Post-processing ───────────────────────────────────────────────────
+    // ── Thread-safe post-processing (static — no instance state) ─────────
 
     /// <summary>
-    /// Argmax across the channel (dim-1) axis of a [1, C, H, W] tensor,
+    /// Argmax across the channel axis of a flat NCHW float array,
     /// producing a [H][W] grid of tile indices.
     /// </summary>
-    private static int[][] ArgmaxChannels(
-        Tensor<float> tensor, int channels, int height, int width)
+    private static int[][] ArgmaxChannelsFromArray(
+        float[] data, int channels, int height, int width)
     {
         var grid = new int[height][];
 
@@ -303,11 +487,11 @@ public class ToadGanGenerator : MonoBehaviour
             for (int col = 0; col < width; col++)
             {
                 int   bestIdx = 0;
-                float bestVal = tensor[0, 0, row, col];
+                float bestVal = data[row * width + col];   // channel 0
 
                 for (int c = 1; c < channels; c++)
                 {
-                    float v = tensor[0, c, row, col];
+                    float v = data[(c * height + row) * width + col];
                     if (v > bestVal)
                     {
                         bestVal = v;
@@ -322,21 +506,16 @@ public class ToadGanGenerator : MonoBehaviour
         return grid;
     }
 
-    // ── Level fix-up passes (ported from generate.py) ──────────────────────
+    private static int TryGetIdStatic(Dictionary<string, int> charToId, string ch) =>
+        charToId.TryGetValue(ch, out int id) ? id : -1;
 
-    private int TryGetId(string ch) =>
-        _charToId.TryGetValue(ch, out int id) ? id : -1;
-
-    /// <summary>
-    /// Ensure pipe columns (§) form unbroken vertical segments touching
-    /// ground (#).  Pipes without ground below or that can't reach minimum
-    /// height are erased.
-    /// </summary>
-    private void FixPipes(int[][] grid, int rows, int cols, int minHeight = 3)
+    private static void FixPipesStatic(
+        int[][] grid, int rows, int cols,
+        Dictionary<string, int> charToId, int minHeight = 3)
     {
-        int PIPE   = TryGetId("§");
-        int GROUND = TryGetId("#");
-        int SKY    = TryGetId("-");
+        int PIPE   = TryGetIdStatic(charToId, "§");
+        int GROUND = TryGetIdStatic(charToId, "#");
+        int SKY    = TryGetIdStatic(charToId, "-");
         if (PIPE < 0 || GROUND < 0 || SKY < 0) return;
 
         for (int c = 0; c < cols; c++)
@@ -396,34 +575,29 @@ public class ToadGanGenerator : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Clear a buffer of rows above each pipe head so blocks can't sit
-    /// directly on top of pipes.
-    /// Recognises all pipe tile characters (§, &lt;, &gt;, [, ]) so that the
-    /// clearance is applied regardless of which pipe token the vocab uses.
-    /// </summary>
-    private void FixBlocksOnPipes(int[][] grid, int rows, int cols, int clearance = 2)
+    private static readonly string[] _pipeCharKeys = { "§", "<", ">", "[", "]" };
+
+    private static void FixBlocksOnPipesStatic(
+        int[][] grid, int rows, int cols,
+        Dictionary<string, int> charToId, int clearance = 2)
     {
-        int SKY = TryGetId("-");
+        int SKY = TryGetIdStatic(charToId, "-");
         if (SKY < 0) return;
 
-        // Collect every pipe-related tile ID that is present in this vocab.
-        // Using a set means the column scan below works even when the model
-        // outputs the 4-quadrant tokens (<, >, [, ]) instead of the compound §.
-        _pipeIds.Clear();
+        var pipeIds = new HashSet<int>();
         foreach (string ch in _pipeCharKeys)
         {
-            int id = TryGetId(ch);
-            if (id >= 0) _pipeIds.Add(id);
+            int id = TryGetIdStatic(charToId, ch);
+            if (id >= 0) pipeIds.Add(id);
         }
-        if (_pipeIds.Count == 0) return;
+        if (pipeIds.Count == 0) return;
 
         for (int c = 0; c < cols; c++)
         {
             int topPipe = -1;
             for (int r = 0; r < rows; r++)
             {
-                if (_pipeIds.Contains(grid[r][c])) { topPipe = r; break; }
+                if (pipeIds.Contains(grid[r][c])) { topPipe = r; break; }
             }
             if (topPipe < 0) continue;
 
@@ -436,31 +610,22 @@ public class ToadGanGenerator : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Ensure every ? block has enough vertical clearance below (and above)
-    /// to be reachable, and enforce minimum spacing between stacked ? blocks.
-    /// </summary>
-    private void FixLuckyBlocks(int[][] grid, int rows, int cols,
-                                int minGap = 3, int minGapAbove = 1)
+    private static void FixLuckyBlocksStatic(
+        int[][] grid, int rows, int cols,
+        Dictionary<string, int> charToId, int minGap = 3, int minGapAbove = 1)
     {
-        int LUCKY = TryGetId("?");
-        int SKY   = TryGetId("-");
+        int LUCKY = TryGetIdStatic(charToId, "?");
+        int SKY   = TryGetIdStatic(charToId, "-");
         if (LUCKY < 0 || SKY < 0) return;
+
+        var luckyRows = new List<int>();
 
         for (int c = 0; c < cols; c++)
         {
-            // Pass 1a: remove ? with insufficient gap below.
-            // Two-tier check:
-            //   (i)  Hard rule – the tile directly below must always be empty sky,
-            //        regardless of minGap.  A lucky block must never sit flush on
-            //        any solid surface (ground, pipe top, brick, etc.).
-            //   (ii) Soft rule – require minGap consecutive sky tiles below so the
-            //        block is reachable and visually readable.
             for (int r = rows - 1; r >= 0; r--)
             {
                 if (grid[r][c] != LUCKY) continue;
 
-                // (i) Hard check: tile directly below must be sky.
                 int directlyBelow = r + 1;
                 if (directlyBelow >= rows || grid[directlyBelow][c] != SKY)
                 {
@@ -468,7 +633,6 @@ public class ToadGanGenerator : MonoBehaviour
                     continue;
                 }
 
-                // (ii) Soft check: count consecutive sky tiles below.
                 int gap = 0;
                 for (int below = r + 1; below < rows; below++)
                 {
@@ -479,7 +643,6 @@ public class ToadGanGenerator : MonoBehaviour
                     grid[r][c] = SKY;
             }
 
-            // Pass 1b: remove ? with insufficient gap above
             for (int r = 0; r < rows; r++)
             {
                 if (grid[r][c] != LUCKY) continue;
@@ -494,18 +657,17 @@ public class ToadGanGenerator : MonoBehaviour
                     grid[r][c] = SKY;
             }
 
-            // Pass 2: enforce spacing between surviving ? blocks (bottom-up)
-            _luckyRows.Clear();
+            luckyRows.Clear();
             for (int r = rows - 1; r >= 0; r--)
             {
-                if (grid[r][c] == LUCKY) _luckyRows.Add(r);
+                if (grid[r][c] == LUCKY) luckyRows.Add(r);
             }
-            if (_luckyRows.Count < 2) continue;
+            if (luckyRows.Count < 2) continue;
 
-            int lastKept = _luckyRows[0];
-            for (int i = 1; i < _luckyRows.Count; i++)
+            int lastKept = luckyRows[0];
+            for (int i = 1; i < luckyRows.Count; i++)
             {
-                int r = _luckyRows[i];
+                int r = luckyRows[i];
                 int between = lastKept - r - 1;
                 if (between >= minGap)
                     lastKept = r;
@@ -514,9 +676,6 @@ public class ToadGanGenerator : MonoBehaviour
             }
         }
     }
-
-    // Allocated once — reused in every FixBlocksOnPipes call.
-    private static readonly string[] _pipeCharKeys = { "§", "<", ">", "[", "]" };
 
     // ── JSON data classes ─────────────────────────────────────────────────
 

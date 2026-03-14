@@ -300,7 +300,7 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
-        int lineCount = 16;
+        int lineCount = 20;
         int totalHeight = HudPadding * 2 + lineCount * HudLineHeight + 4;
 
         Rect area = new Rect(10, 10, HudWidth, totalHeight);
@@ -346,12 +346,32 @@ public class PerformanceMonitor : MonoBehaviour
             $"<color=#{gcHex}>{_gcDelta} collection(s) / 0.5 s</color>");
 
         // ── Level generation ──────────────────────────────────────────────
-        DrawSectionLabel("LEVEL GENERATION");
+        DrawSectionLabel("LEVEL GENERATION  (async)");
 
         string genStatus = _isGenerating
             ? "<color=#FF6B6B>● Running</color>"
             : "<color=#A8FF78>● Idle</color>";
         DrawRow("ML Inference", genStatus);
+
+        // Async pipeline metrics
+        int queueLen   = generator != null ? generator.PendingJobCount  : 0;
+        int pollFrames = generator != null ? generator.LastAsyncPollFrames : 0;
+        bool blocked   = generator != null && generator.LastJobBlockedMainThread;
+        int blockCount = generator != null ? generator.TotalBlockedCount : 0;
+
+        string qHex = queueLen > 0 ? HexYellow : HexGreen;
+        DrawRow("Job Queue",
+            $"<color=#{qHex}>{queueLen} pending</color>" +
+            (generator != null && generator.IsProcessing ? "  +1 active" : ""));
+
+        string blockHex = blocked ? HexRed : HexGreen;
+        DrawRow("Thread",
+            $"<color=#{blockHex}>{(blocked ? "✗ Blocked last job!" : "✓ Non-blocking")}</color>" +
+            (blockCount > 0 ? $"  ({blockCount} total)" : ""));
+
+        string pollHex = pollFrames > 5 ? HexYellow : HexBlue;
+        DrawRow("GPU Poll",
+            $"<color=#{pollHex}>{pollFrames} frames</color>");
 
         DrawRow("Last Gen",  _lastGenMs  >= 0 ? $"{_lastGenMs:F1} ms"  : "—");
         DrawRow("Avg Gen",   _genCount   >  0 ? $"{_avgGenMs:F1} ms  (n={_genCount})"  : "—");
@@ -464,7 +484,8 @@ public class PerformanceMonitor : MonoBehaviour
                 "GC_Delta,Generating," +
                 "LastGen_ms,AvgGen_ms,GenCount," +
                 "LastBuild_ms,AvgBuild_ms,BuildCount," +
-                "TilesPerChunk,ActiveTiles");
+                "TilesPerChunk,ActiveTiles," +
+                "JobQueue,PollFrames,Blocked,TotalBlocked");
             _csv.Flush();
 
             Debug.Log($"[PerformanceMonitor] CSV log opened: {path}");
@@ -488,6 +509,11 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
+        int csvQueue   = generator != null ? generator.PendingJobCount        : 0;
+        int csvPoll    = generator != null ? generator.LastAsyncPollFrames   : 0;
+        int csvBlocked = generator != null && generator.LastJobBlockedMainThread ? 1 : 0;
+        int csvTotBlk  = generator != null ? generator.TotalBlockedCount    : 0;
+
         _csv.WriteLine(
             $"{Time.time:F2}," +
             $"{_currentFps:F1},{_avgFps:F1},{_minFps:F1},{_frameTimeMs:F2}," +
@@ -496,7 +522,8 @@ public class PerformanceMonitor : MonoBehaviour
             $"{_gcDelta},{(_isGenerating ? 1 : 0)}," +
             $"{_lastGenMs:F2},{_avgGenMs:F2},{_genCount}," +
             $"{_lastBuildMs:F2},{_avgBuildMs:F2},{_buildCount}," +
-            $"{_lastChunkTiles},{activeTiles}");
+            $"{_lastChunkTiles},{activeTiles}," +
+            $"{csvQueue},{csvPoll},{csvBlocked},{csvTotBlk}");
 
         _csv.Flush();
     }

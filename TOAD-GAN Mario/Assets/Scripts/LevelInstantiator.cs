@@ -211,7 +211,10 @@ public class LevelInstantiator : MonoBehaviour
         if (player != null)
             _playerRb = player.GetComponent<Rigidbody2D>();
 
-        // Request the first level immediately on Play
+        // Request the first level immediately on Play.
+        // Mark _isGenerating now so Update() doesn't enqueue a duplicate
+        // request before the async result arrives.
+        _isGenerating = true;
         generator.Generate();
     }
 
