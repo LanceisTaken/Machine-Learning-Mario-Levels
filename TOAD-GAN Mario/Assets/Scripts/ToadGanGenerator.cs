@@ -84,6 +84,13 @@ public class ToadGanGenerator : MonoBehaviour
     private Dictionary<string, int> _charToId;      // stoi: char → id
     private bool _ready;
 
+    /// <summary>
+    /// The loaded itos vocabulary (tile-ID → character).
+    /// Used by <see cref="GenerationScheduler"/> to build fallback chunks.
+    /// Null until <see cref="Start"/> has successfully loaded vocab.json.
+    /// </summary>
+    public Dictionary<string, string> TileMap => _tileMap;
+
     // Reusable collections for post-processing passes.  Allocated once and
     // cleared before each use so chunk generation does not produce GC garbage.
     private readonly HashSet<int> _pipeIds   = new HashSet<int>();

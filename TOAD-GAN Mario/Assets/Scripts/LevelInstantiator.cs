@@ -80,11 +80,51 @@ public class LevelInstantiator : MonoBehaviour
     /// <summary>Tracks the X offset (in world units) where the next chunk should start.</summary>
     private float _nextChunkX = 0f;
 
-    /// <summary>Prevents overlapping generation requests.</summary>
-    private bool _isGenerating = false;
+    /// <summary>True while a BuildChunkCoroutine is running.</summary>
+    private bool _isBuilding = false;
 
     /// <summary>Tracks whether the player has been spawned in the level.</summary>
     private bool _playerSpawned = false;
+
+    /// <summary>
+    /// When true, a <see cref="GenerationScheduler"/> is managing generation
+    /// timing.  The built-in Update() trigger is bypassed.
+    /// </summary>
+    private bool _schedulerManaged = false;
+
+    // ── Public API for GenerationScheduler ────────────────────────────────
+
+    /// <summary>World-X where the next chunk will be appended.</summary>
+    public float NextChunkX => _nextChunkX;
+
+    /// <summary>True while a chunk build coroutine is running.</summary>
+    public bool IsBuilding => _isBuilding;
+
+    /// <summary>
+    /// Returns the player's current X position using the physics-safe path
+    /// (Rigidbody2D.position when available).
+    /// </summary>
+    public float GetPlayerX()
+    {
+        if (_playerRb != null) return _playerRb.position.x;
+        if (player != null)    return player.transform.position.x;
+        return 0f;
+    }
+
+    /// <summary>
+    /// Accepts pre-generated tile data from <see cref="GenerationScheduler"/>
+    /// and starts building the chunk.  This is the public entry point that
+    /// replaces the internal <see cref="HandleGeneratedLevel"/> callback when
+    /// a scheduler is active.
+    /// </summary>
+    public void ReceiveChunkData(
+        int[][]                       tileIds,
+        Dictionary<string, string>    tileMap,
+        int                           height,
+        int                           width)
+    {
+        HandleGeneratedLevel(tileIds, tileMap, height, width);
+    }
 
     // ── Serialisable helper ───────────────────────────────────────────────
 
@@ -205,11 +245,22 @@ public class LevelInstantiator : MonoBehaviour
             return;
         }
 
-        generator.OnLevelGenerated += HandleGeneratedLevel;
-        generator.OnError          += err => Debug.LogError("[LevelInstantiator] " + err);
-
         if (player != null)
             _playerRb = player.GetComponent<Rigidbody2D>();
+
+        // If a GenerationScheduler is present and enabled, it owns generation
+        // timing and chunk delivery.  We only handle building.
+        var scheduler = FindObjectOfType<GenerationScheduler>();
+        if (scheduler != null && scheduler.enabled)
+        {
+            _schedulerManaged = true;
+            generator.OnError += err => Debug.LogError("[LevelInstantiator] " + err);
+            Debug.Log("[LevelInstantiator] GenerationScheduler detected — delegating generation control.");
+            return;
+        }
+
+        generator.OnLevelGenerated += HandleGeneratedLevel;
+        generator.OnError          += err => Debug.LogError("[LevelInstantiator] " + err);
 
         // Request the first level immediately on Play
         generator.Generate();
@@ -221,14 +272,15 @@ public class LevelInstantiator : MonoBehaviour
 
         CleanupOldTiles();
 
-        if (_isGenerating) return;
+        // When a GenerationScheduler is active, it controls generation timing.
+        if (_schedulerManaged || _isBuilding) return;
 
         float levelEdge = _nextChunkX;
         float playerX = _playerRb != null ? _playerRb.position.x : player.transform.position.x;
 
         if (playerX + (generateAheadDistance * tileSize) >= levelEdge)
         {
-            _isGenerating = true;
+            _isBuilding = true;
             generator.Generate();
         }
     }
@@ -254,7 +306,7 @@ public class LevelInstantiator : MonoBehaviour
         if (tileIds == null || tileIds.Length == 0)
         {
             Debug.LogError("[LevelInstantiator] Received empty tile data.");
-            _isGenerating = false;
+            _isBuilding = false;
             return;
         }
 
@@ -271,9 +323,9 @@ public class LevelInstantiator : MonoBehaviour
         bool needSpawn = !_playerSpawned && player != null;
         if (needSpawn) _playerSpawned = true; // Mark now to prevent a double-spawn if another chunk arrives quickly
 
+        _isBuilding = true;
         Debug.Log($"[LevelInstantiator] Appending chunk at X={_nextChunkX}: {height}h x {width}w");
         StartCoroutine(BuildChunkCoroutine(tileIds, idToChar, height, width, needSpawn));
-        // _isGenerating stays true; the coroutine clears it when done
     }
 
     /// <summary>Destroy all previously spawned tiles and clear the tracking lists.</summary>
@@ -446,7 +498,7 @@ public class LevelInstantiator : MonoBehaviour
                   $"Next chunk starts at X={_nextChunkX}");
 
         OnChunkBuilt?.Invoke(buildTimeMs, tilesSpawned);
-        _isGenerating = false;
+        _isBuilding = false;
     }
 
     private void SpawnPlayer(int[][] tileIds, Dictionary<int, char> idToChar, int height, int width)

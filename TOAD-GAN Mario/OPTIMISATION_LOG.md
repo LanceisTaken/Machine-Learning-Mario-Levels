@@ -325,6 +325,154 @@ Eliminates ~4,000–4,800 managed string allocations/second from the HUD overlay
 
 ---
 
+## Session 4 — 2026-03-16
+
+**Goal**: Introduce a cost-aware generation scheduler that is explicitly aware of
+the ML model's inference cost and the player's position / speed, replacing the
+reactive `if (player near edge) → generate()` pattern.
+
+---
+
+### OPT-12 · `GenerationScheduler` — Predictive ML-cost-aware chunk scheduling
+
+**Files**: `Assets/Scripts/GenerationScheduler.cs` (new),
+`Assets/Scripts/GenerationSchedulerConfig.cs` (new),
+`Assets/Scripts/LevelInstantiator.cs` (modified),
+`Assets/Scripts/ToadGanGenerator.cs` (modified),
+`Assets/Scripts/PerformanceMonitor.cs` (modified)
+
+**Problem**
+
+The previous generation trigger was purely reactive — `LevelInstantiator.Update()`
+checked whether the player was within `generateAheadDistance` tiles of the level
+edge and, if so, called `generator.Generate()`.  This had three cost-related
+weaknesses:
+
+1. **No awareness of inference duration.**  The trigger distance was a static tile
+   count (`generateAheadDistance = 20`) with no relationship to how long ML
+   inference actually takes.  If inference is slow (e.g. CPU backend, 400 ms), the
+   buffer is too thin; if fast (GPU, 100 ms), it's wastefully thick.
+
+2. **No awareness of player speed.**  A walking player (6 u/s) and a dashing
+   player (18 u/s) consume terrain at 3× different rates, but the trigger distance
+   was the same for both.  A sustained dash could outrun the buffer and hit the
+   void.
+
+3. **No buffer / queue.**  At most one generation was ever in-flight; the system
+   could not pre-build a reserve of chunks to absorb speed bursts.
+
+4. **No graceful degradation.**  If the player reached the frontier before a chunk
+   was ready, the only outcome was a main-thread stall or falling into empty space.
+
+**Fix — Generation Scheduler**
+
+A new `GenerationScheduler` MonoBehaviour sits between `ToadGanGenerator` and
+`LevelInstantiator`.  When present and enabled, `LevelInstantiator` automatically
+detects it and disables its own generation trigger (`_schedulerManaged = true`).
+
+**Core formula — safe prefetch distance:**
+
+```
+totalLatency   = EMA(inferenceTime) + EMA(buildTime)     [ms]
+chunksPerSec   = assumedMaxPlayerSpeed / (avgChunkWidth × tileSize)
+chunksConsumed = (totalLatency / 1000) × chunksPerSec
+safePrefetch   = ⌈chunksConsumed⌉ + safetyMargin
+target         = max(minChunksAhead, safePrefetch)
+```
+
+Example with measured values:
+
+| Parameter | Value |
+|---|---|
+| EMA inference | 200 ms |
+| EMA build | 50 ms |
+| Max player speed (dash) | 18 u/s |
+| Avg chunk width | 28 tiles × 1 u/tile = 28 u |
+| Safety margin | 1 chunk |
+
+```
+chunksPerSec   = 18 / 28 ≈ 0.643
+chunksConsumed = 0.250 × 0.643 ≈ 0.161
+safePrefetch   = ⌈0.161⌉ + 1 = 2 chunks
+target         = max(3, 2) = 3 chunks
+```
+
+So with `minChunksAhead = 3`, the scheduler maintains at least 3 chunks of
+terrain ahead.  If inference time increases (e.g. CPU fallback), the formula
+automatically raises the target.
+
+**Four mitigation strategies:**
+
+| Strategy | How it mitigates ML cost |
+|---|---|
+| **Predictive prefetch** | Uses real measured inference time (EMA) × worst-case player speed to start generation *before* it's urgent, so the synchronous stall occurs while the player still has runway. |
+| **Startup pre-generation** | Front-loads `preGenerateCount` chunks into a buffer during `Start()`, shifting the ML cost to the loading phase where delay is expected. |
+| **Chunk buffer queue** | Decouples "generate" from "build" — ML chunks queue up and are fed to `LevelInstantiator` one at a time.  Multiple chunks can be pre-generated while the first is still being built. |
+| **Graceful fallback** | If the player out-runs the buffer (sprint/dash), a flat procedural "fallback chunk" (zero ML cost, microseconds to create) spawns safe ground.  The player never falls into void; the next ML chunk replaces the gap seamlessly. |
+
+**Config (ScriptableObject `GenerationSchedulerConfig`):**
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `minChunksAhead` | int | 3 | Hard minimum chunk buffer |
+| `maxConcurrentGenerations` | int | 1 | Generation concurrency cap (future async support) |
+| `safetyMarginChunks` | int | 1 | Extra margin on computed prefetch |
+| `assumedMaxPlayerSpeed` | float | 18 | Worst-case speed (dash) for prefetch calc |
+| `fallbackTriggerDistance` | float | 5 | World-units before frontier to spawn fallback |
+| `fallbackChunkWidth` | int | 16 | Width of emergency fallback chunk |
+| `fallbackChunkHeight` | int | 14 | Height of emergency fallback chunk |
+| `fallbackGroundRows` | int | 2 | Solid rows at bottom of fallback |
+| `emaAlpha` | float | 0.3 | Smoothing for inference / build time EMA |
+| `initialAssumedInferenceMs` | float | 300 | Assumed inference time before first measurement |
+| `initialAssumedBuildMs` | float | 50 | Assumed build time before first measurement |
+| `preGenerateCount` | int | 2 | Chunks pre-generated at startup |
+
+All values are live-editable in the Inspector during Play for rapid experimentation.
+
+**LevelInstantiator changes:**
+- Renamed `_isGenerating` → `_isBuilding` (it always meant "build in progress").
+- Exposed `NextChunkX`, `IsBuilding`, `GetPlayerX()` read-only for the scheduler.
+- Added `ReceiveChunkData()` as public entry point for externally-supplied chunks.
+- `Start()` auto-detects `GenerationScheduler` — if present, skips self-scheduling.
+- Fully backward-compatible: without a scheduler, behaviour is identical to before.
+
+**ToadGanGenerator changes:**
+- Exposed `TileMap` property (read-only accessor to the loaded `itos` vocabulary)
+  so the scheduler can build fallback chunks using correct tile IDs.
+
+**PerformanceMonitor changes:**
+- Auto-discovers `GenerationScheduler` and displays a new "GENERATION SCHEDULER"
+  HUD section when active: buffered chunks, safe prefetch target, EMA timings,
+  fallback status, and total ML/fallback chunk counts.
+- CSV log extended with 6 scheduler columns (`Sched_Buffered`, `Sched_SafePrefetch`,
+  `Sched_EmaInfer`, `Sched_EmaBuild`, `Sched_Fallback`, `Sched_FallbackTotal`).
+
+**Impact**
+
+- Generation is triggered based on *measured* ML cost rather than a fixed tile
+  count, automatically adapting to different hardware / backend combinations.
+- The chunk buffer absorbs speed bursts (dash) that previously could outrun the
+  single-chunk reactive system.
+- Fallback chunks guarantee the player always has ground, eliminating the worst
+  failure mode (void fall) entirely.
+- All scheduling parameters are exposed in a ScriptableObject for A/B testing
+  different configurations.
+- No change to the ONNX inference pipeline itself — the scheduler is purely a
+  wrapper around *when* `Generate()` is called, not *how*.
+
+**vs hand-authored levels:**
+
+Hand-authored levels are pre-loaded assets with zero generation cost — the entire
+level exists before the player moves.  ML-generated levels pay an ongoing
+inference cost per chunk.  This scheduler specifically bridges that gap by:
+
+1. Making the *timing* of that cost invisible to the player (prefetch).
+2. Absorbing *variance* in that cost (EMA + buffer).
+3. Providing a *zero-cost fallback* when the model can't keep up.
+4. Logging all cost metrics so developers can quantify the overhead vs static levels.
+
+---
+
 ## Future Work / Candidates
 
 | ID | Area | Idea | Priority |
@@ -334,4 +482,6 @@ Eliminates ~4,000–4,800 managed string allocations/second from the HUD overlay
 | F-03 | `ToadGanGenerator` | Reuse pre-allocated `float[]` noise buffers across `Generate()` calls | Low |
 | F-04 | `EnemyPatrol` | Use `Physics2D.RaycastNonAlloc` buffer; currently raycasts return structs (already zero-alloc in Unity 2021+, verify) | Low |
 | F-05 | General | Strip `Debug.Log` calls from hot paths in release builds using `[Conditional("UNITY_EDITOR")]` or a custom logger | Medium |
-| F-06 | `ToadGanGenerator` | Investigate Unity Sentis async scheduling to move ONNX inference off the main thread | High |
+| F-06 | `ToadGanGenerator` | Investigate Unity Sentis async scheduling to move ONNX inference off the main thread — would allow `GenerationScheduler.maxConcurrentGenerations > 1` to truly overlap | High |
+| F-07 | `GenerationScheduler` | Track player velocity (not just max speed) for tighter adaptive prefetch when the player is slow-walking | Low |
+| F-08 | `GenerationScheduler` | Visual/audio cue when fallback chunk is entered (e.g. brief tile tint or subtle audio indicator) | Low |

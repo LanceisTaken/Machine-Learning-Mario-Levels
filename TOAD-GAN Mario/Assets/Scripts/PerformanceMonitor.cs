@@ -43,8 +43,9 @@ public class PerformanceMonitor : MonoBehaviour
     // ── Inspector ─────────────────────────────────────────────────────────
 
     [Header("References (auto-discovered if left empty)")]
-    public ToadGanGenerator  generator;
-    public LevelInstantiator levelInstantiator;
+    public ToadGanGenerator    generator;
+    public LevelInstantiator   levelInstantiator;
+    public GenerationScheduler generationScheduler;
 
     [Header("FPS Tracking")]
     [Tooltip("Number of frames kept for rolling average / min calculations.")]
@@ -148,6 +149,9 @@ public class PerformanceMonitor : MonoBehaviour
 
         if (levelInstantiator == null)
             levelInstantiator = FindObjectOfType<LevelInstantiator>();
+
+        if (generationScheduler == null)
+            generationScheduler = FindObjectOfType<GenerationScheduler>();
 
         if (generator != null)
         {
@@ -300,7 +304,9 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
-        int lineCount = 16;
+        bool hasScheduler = generationScheduler != null && generationScheduler.enabled;
+
+        int lineCount = hasScheduler ? 23 : 16;
         int totalHeight = HudPadding * 2 + lineCount * HudLineHeight + 4;
 
         Rect area = new Rect(10, 10, HudWidth, totalHeight);
@@ -359,6 +365,33 @@ public class PerformanceMonitor : MonoBehaviour
         DrawRow("Avg Build", _buildCount >  0 ? $"{_avgBuildMs:F1} ms  (n={_buildCount})" : "—");
         DrawRow("Tiles/Chunk", _lastChunkTiles > 0 ? _lastChunkTiles.ToString() : "—");
         DrawRow("Active Tiles", activeTiles >= 0 ? activeTiles.ToString() : "—");
+
+        // ── Scheduler ─────────────────────────────────────────────────────
+        if (hasScheduler)
+        {
+            DrawSectionLabel("GENERATION SCHEDULER");
+
+            string bufHex = generationScheduler.BufferedChunks > 0 ? HexGreen : HexYellow;
+            DrawRow("Buffered",
+                $"<color=#{bufHex}>{generationScheduler.BufferedChunks} chunk(s)</color>");
+
+            DrawRow("Safe Prefetch",
+                $"{generationScheduler.ComputedSafePrefetch:F1} chunks");
+
+            DrawRow("EMA Infer",
+                $"{generationScheduler.AvgInferenceMs:F1} ms");
+
+            DrawRow("EMA Build",
+                $"{generationScheduler.AvgBuildMs:F1} ms");
+
+            string fbHex = generationScheduler.FallbackActive ? HexRed : HexGreen;
+            DrawRow("Fallback",
+                $"<color=#{fbHex}>{(generationScheduler.FallbackActive ? "● ACTIVE" : "○ None")}</color>  " +
+                $"({generationScheduler.FallbackChunksSpawned} total)");
+
+            DrawRow("ML Chunks",
+                generationScheduler.TotalChunksGenerated.ToString());
+        }
 
         GUILayout.EndArea();
     }
@@ -464,7 +497,9 @@ public class PerformanceMonitor : MonoBehaviour
                 "GC_Delta,Generating," +
                 "LastGen_ms,AvgGen_ms,GenCount," +
                 "LastBuild_ms,AvgBuild_ms,BuildCount," +
-                "TilesPerChunk,ActiveTiles");
+                "TilesPerChunk,ActiveTiles," +
+                "Sched_Buffered,Sched_SafePrefetch,Sched_EmaInfer," +
+                "Sched_EmaBuild,Sched_Fallback,Sched_FallbackTotal");
             _csv.Flush();
 
             Debug.Log($"[PerformanceMonitor] CSV log opened: {path}");
@@ -488,6 +523,8 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
+        bool hasSched = generationScheduler != null && generationScheduler.enabled;
+
         _csv.WriteLine(
             $"{Time.time:F2}," +
             $"{_currentFps:F1},{_avgFps:F1},{_minFps:F1},{_frameTimeMs:F2}," +
@@ -496,7 +533,13 @@ public class PerformanceMonitor : MonoBehaviour
             $"{_gcDelta},{(_isGenerating ? 1 : 0)}," +
             $"{_lastGenMs:F2},{_avgGenMs:F2},{_genCount}," +
             $"{_lastBuildMs:F2},{_avgBuildMs:F2},{_buildCount}," +
-            $"{_lastChunkTiles},{activeTiles}");
+            $"{_lastChunkTiles},{activeTiles}," +
+            $"{(hasSched ? generationScheduler.BufferedChunks : -1)}," +
+            $"{(hasSched ? generationScheduler.ComputedSafePrefetch : -1f):F2}," +
+            $"{(hasSched ? generationScheduler.AvgInferenceMs : -1f):F2}," +
+            $"{(hasSched ? generationScheduler.AvgBuildMs : -1f):F2}," +
+            $"{(hasSched ? (generationScheduler.FallbackActive ? 1 : 0) : -1)}," +
+            $"{(hasSched ? generationScheduler.FallbackChunksSpawned : -1)}");
 
         _csv.Flush();
     }
