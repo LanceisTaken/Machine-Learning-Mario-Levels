@@ -43,9 +43,8 @@ public class PerformanceMonitor : MonoBehaviour
     // ── Inspector ─────────────────────────────────────────────────────────
 
     [Header("References (auto-discovered if left empty)")]
-    public ToadGanGenerator    generator;
-    public LevelInstantiator   levelInstantiator;
-    public GenerationScheduler scheduler;
+    public ToadGanGenerator  generator;
+    public LevelInstantiator levelInstantiator;
 
     [Header("FPS Tracking")]
     [Tooltip("Number of frames kept for rolling average / min calculations.")]
@@ -149,9 +148,6 @@ public class PerformanceMonitor : MonoBehaviour
 
         if (levelInstantiator == null)
             levelInstantiator = FindObjectOfType<LevelInstantiator>();
-
-        if (scheduler == null)
-            scheduler = FindObjectOfType<GenerationScheduler>();
 
         if (generator != null)
         {
@@ -304,7 +300,7 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
-        int lineCount = scheduler != null ? 27 : 20;
+        int lineCount = 20;
         int totalHeight = HudPadding * 2 + lineCount * HudLineHeight + 4;
 
         Rect area = new Rect(10, 10, HudWidth, totalHeight);
@@ -383,38 +379,6 @@ public class PerformanceMonitor : MonoBehaviour
         DrawRow("Avg Build", _buildCount >  0 ? $"{_avgBuildMs:F1} ms  (n={_buildCount})" : "—");
         DrawRow("Tiles/Chunk", _lastChunkTiles > 0 ? _lastChunkTiles.ToString() : "—");
         DrawRow("Active Tiles", activeTiles >= 0 ? activeTiles.ToString() : "—");
-
-        // ── Scheduler ─────────────────────────────────────────────────────
-        if (scheduler != null)
-        {
-            DrawSectionLabel("GENERATION SCHEDULER");
-
-            string pregenHex = scheduler.IsPreGenerating ? HexYellow : HexGreen;
-            DrawRow("Status",
-                scheduler.IsPreGenerating
-                    ? $"<color=#{pregenHex}>● Pre-generating</color>"
-                    : $"<color=#{HexGreen}>● Running</color>");
-
-            int buffered  = scheduler.BufferedChunkCount;
-            int inFlight  = scheduler.InFlightCount;
-            string bufHex = buffered == 0 && inFlight == 0 ? HexRed
-                          : buffered  < 2                   ? HexYellow
-                          : HexGreen;
-            DrawRow("Buffer",
-                $"<color=#{bufHex}>{buffered} ready</color>  " +
-                $"{inFlight} in-flight");
-
-            DrawRow("Safe Prefetch",
-                $"{scheduler.SafePrefetchDistanceUnits:F1} units");
-
-            DrawRow("EMA Inference", $"{scheduler.EmaInferenceMs:F1} ms");
-            DrawRow("EMA Build",     $"{scheduler.EmaBuildMs:F1} ms");
-
-            string fbHex = scheduler.TotalFallbacksInserted > 0 ? HexYellow : HexGreen;
-            DrawRow("Fallbacks",
-                $"<color=#{fbHex}>{scheduler.TotalFallbacksInserted}</color>  " +
-                $"({scheduler.TotalMlChunksGenerated} ML chunks total)");
-        }
 
         GUILayout.EndArea();
     }
@@ -521,9 +485,7 @@ public class PerformanceMonitor : MonoBehaviour
                 "LastGen_ms,AvgGen_ms,GenCount," +
                 "LastBuild_ms,AvgBuild_ms,BuildCount," +
                 "TilesPerChunk,ActiveTiles," +
-                "JobQueue,PollFrames,Blocked,TotalBlocked," +
-                "SchedBuffer,SchedInFlight,SchedEmaInference_ms,SchedEmaBuild_ms," +
-                "SchedSafePrefetch_u,SchedFallbacks,SchedMlChunks");
+                "JobQueue,PollFrames,Blocked,TotalBlocked");
             _csv.Flush();
 
             Debug.Log($"[PerformanceMonitor] CSV log opened: {path}");
@@ -547,18 +509,10 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
-        int   csvQueue       = generator != null ? generator.PendingJobCount        : 0;
-        int   csvPoll        = generator != null ? generator.LastAsyncPollFrames   : 0;
-        int   csvBlocked     = generator != null && generator.LastJobBlockedMainThread ? 1 : 0;
-        int   csvTotBlk      = generator != null ? generator.TotalBlockedCount    : 0;
-
-        int   csvSchedBuf    = scheduler != null ? scheduler.BufferedChunkCount          : -1;
-        int   csvSchedFly    = scheduler != null ? scheduler.InFlightCount               : -1;
-        float csvSchedInf    = scheduler != null ? scheduler.EmaInferenceMs              : -1f;
-        float csvSchedBld    = scheduler != null ? scheduler.EmaBuildMs                  : -1f;
-        float csvSchedPre    = scheduler != null ? scheduler.SafePrefetchDistanceUnits   : -1f;
-        int   csvSchedFb     = scheduler != null ? scheduler.TotalFallbacksInserted      : -1;
-        int   csvSchedMl     = scheduler != null ? scheduler.TotalMlChunksGenerated      : -1;
+        int csvQueue   = generator != null ? generator.PendingJobCount        : 0;
+        int csvPoll    = generator != null ? generator.LastAsyncPollFrames   : 0;
+        int csvBlocked = generator != null && generator.LastJobBlockedMainThread ? 1 : 0;
+        int csvTotBlk  = generator != null ? generator.TotalBlockedCount    : 0;
 
         _csv.WriteLine(
             $"{Time.time:F2}," +
@@ -569,9 +523,7 @@ public class PerformanceMonitor : MonoBehaviour
             $"{_lastGenMs:F2},{_avgGenMs:F2},{_genCount}," +
             $"{_lastBuildMs:F2},{_avgBuildMs:F2},{_buildCount}," +
             $"{_lastChunkTiles},{activeTiles}," +
-            $"{csvQueue},{csvPoll},{csvBlocked},{csvTotBlk}," +
-            $"{csvSchedBuf},{csvSchedFly},{csvSchedInf:F2},{csvSchedBld:F2}," +
-            $"{csvSchedPre:F2},{csvSchedFb},{csvSchedMl}");
+            $"{csvQueue},{csvPoll},{csvBlocked},{csvTotBlk}");
 
         _csv.Flush();
     }
