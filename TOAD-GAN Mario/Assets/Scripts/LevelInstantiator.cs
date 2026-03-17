@@ -60,11 +60,21 @@ public class LevelInstantiator : MonoBehaviour
     public GameObject player;
 
     [Header("Infinite Generation")]
-    [Tooltip("How close (in tiles) the player can get to the level edge before generating more. Increase for a larger safety buffer before the chunk arrives.")]
+    [Tooltip("How close (in tiles) the player can get to the level edge before generating more. " +
+             "Ignored when a ChunkScheduler is present (externalScheduler = true).")]
     public float generateAheadDistance = 20f;
 
     [Tooltip("How far behind the player (in units) before tiles get destroyed.")]
     public float destroyBehindDistance = 50f;
+
+    /// <summary>
+    /// When true, the built-in distance check in <see cref="Update"/> is
+    /// skipped and an external <see cref="ChunkScheduler"/> is responsible
+    /// for calling <see cref="ToadGanGenerator.RequestGeneration"/>.
+    /// Set automatically by <see cref="ChunkScheduler.Start"/>.
+    /// </summary>
+    [HideInInspector]
+    public bool externalScheduler = false;
 
     [Header("Performance")]
     [Tooltip("Maximum tile GameObjects instantiated per frame during chunk building. Lower = smoother framerate during build; higher = chunk appears faster.")]
@@ -79,6 +89,13 @@ public class LevelInstantiator : MonoBehaviour
 
     /// <summary>Tracks the X offset (in world units) where the next chunk should start.</summary>
     private float _nextChunkX = 0f;
+
+    /// <summary>Read-only access for the scheduler to know the frontier position.</summary>
+    public float NextChunkX => _nextChunkX;
+
+    /// <summary>Width (in world units) of the most recently built chunk.
+    /// Zero until the first chunk is built.</summary>
+    public float LastChunkWidthUnits { get; private set; }
 
     /// <summary>Prevents overlapping generation requests.</summary>
     private bool _isGenerating = false;
@@ -211,11 +228,14 @@ public class LevelInstantiator : MonoBehaviour
         if (player != null)
             _playerRb = player.GetComponent<Rigidbody2D>();
 
-        // Request the first level immediately on Play.
-        // Mark _isGenerating now so Update() doesn't enqueue a duplicate
-        // request before the async result arrives.
-        _isGenerating = true;
-        generator.Generate();
+        // When no external scheduler is attached, request the first chunk
+        // immediately.  Mark _isGenerating so Update() doesn't double-request.
+        // When a ChunkScheduler is present it will handle the initial request.
+        if (!externalScheduler)
+        {
+            _isGenerating = true;
+            generator.Generate();
+        }
     }
 
     private void Update()
@@ -223,6 +243,9 @@ public class LevelInstantiator : MonoBehaviour
         if (player == null || generator == null) return;
 
         CleanupOldTiles();
+
+        // When a ChunkScheduler is active it owns generation timing.
+        if (externalScheduler) return;
 
         if (_isGenerating) return;
 
@@ -437,7 +460,9 @@ public class LevelInstantiator : MonoBehaviour
             tilesSpawned++;
         }
 
-        _nextChunkX = chunkStartX + width * tileSize;
+        float chunkWidthUnits = width * tileSize;
+        _nextChunkX = chunkStartX + chunkWidthUnits;
+        LastChunkWidthUnits = chunkWidthUnits;
 
         if (spawnPlayer)
             SpawnPlayer(tileIds, idToChar, height, width);

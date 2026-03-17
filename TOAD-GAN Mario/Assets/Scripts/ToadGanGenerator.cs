@@ -124,6 +124,9 @@ public class ToadGanGenerator : MonoBehaviour
     /// </summary>
     public int TotalBlockedCount { get; private set; }
 
+    /// <summary>Total number of successfully completed generations.</summary>
+    public int TotalGenerations { get; private set; }
+
     // ── Job data class ────────────────────────────────────────────────────
 
     public class GenerationJob
@@ -357,6 +360,7 @@ public class ToadGanGenerator : MonoBehaviour
             LastAsyncPollFrames      = pollFrames;
             LastJobBlockedMainThread = didBlock;
             if (didBlock) TotalBlockedCount++;
+            TotalGenerations++;
 
             Debug.Log($"[ToadGanGenerator] Generated {height}×{width} tile grid " +
                       $"({channels} channels) in {durationMs:F1} ms " +

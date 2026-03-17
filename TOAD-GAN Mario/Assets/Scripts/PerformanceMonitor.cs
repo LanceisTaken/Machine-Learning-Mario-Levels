@@ -45,6 +45,7 @@ public class PerformanceMonitor : MonoBehaviour
     [Header("References (auto-discovered if left empty)")]
     public ToadGanGenerator  generator;
     public LevelInstantiator levelInstantiator;
+    public ChunkScheduler    chunkScheduler;
 
     [Header("FPS Tracking")]
     [Tooltip("Number of frames kept for rolling average / min calculations.")]
@@ -148,6 +149,9 @@ public class PerformanceMonitor : MonoBehaviour
 
         if (levelInstantiator == null)
             levelInstantiator = FindObjectOfType<LevelInstantiator>();
+
+        if (chunkScheduler == null)
+            chunkScheduler = FindObjectOfType<ChunkScheduler>();
 
         if (generator != null)
         {
@@ -300,7 +304,8 @@ public class PerformanceMonitor : MonoBehaviour
             ? levelInstantiator.transform.childCount
             : -1;
 
-        int lineCount = 20;
+        bool hasScheduler = chunkScheduler != null;
+        int lineCount = hasScheduler ? 27 : 20;
         int totalHeight = HudPadding * 2 + lineCount * HudLineHeight + 4;
 
         Rect area = new Rect(10, 10, HudWidth, totalHeight);
@@ -379,6 +384,35 @@ public class PerformanceMonitor : MonoBehaviour
         DrawRow("Avg Build", _buildCount >  0 ? $"{_avgBuildMs:F1} ms  (n={_buildCount})" : "—");
         DrawRow("Tiles/Chunk", _lastChunkTiles > 0 ? _lastChunkTiles.ToString() : "—");
         DrawRow("Active Tiles", activeTiles >= 0 ? activeTiles.ToString() : "—");
+
+        // ── Chunk scheduler ──────────────────────────────────────────────
+        if (hasScheduler)
+        {
+            DrawSectionLabel("CHUNK SCHEDULER");
+
+            int ahead = chunkScheduler.ChunksAhead;
+            string aheadHex = ahead >= 3 ? HexGreen : ahead >= 1 ? HexYellow : HexRed;
+            DrawRow("Chunks Ahead",
+                $"<color=#{aheadHex}>{ahead}</color>  " +
+                $"(player={chunkScheduler.PlayerChunkIndex}, frontier={chunkScheduler.FrontierChunkIndex})");
+
+            DrawRow("Prefetch",
+                $"{chunkScheduler.PrefetchTiles:F0} tiles");
+
+            DrawRow("EMA Infer",
+                $"{chunkScheduler.SmoothedInferenceMs:F1} ms");
+
+            float sm = chunkScheduler.SpeedMultiplier;
+            string smHex = sm >= 0.99f ? HexGreen : sm >= 0.5f ? HexYellow : HexRed;
+            DrawRow("Speed Mult",
+                $"<color=#{smHex}>{sm:P0}</color>" +
+                (chunkScheduler.TotalSlowdownFrames > 0
+                    ? $"  ({chunkScheduler.TotalSlowdownFrames} slow frames)"
+                    : ""));
+
+            DrawRow("Requested",
+                $"chunk #{chunkScheduler.HighestRequestedChunk}");
+        }
 
         GUILayout.EndArea();
     }
@@ -485,7 +519,8 @@ public class PerformanceMonitor : MonoBehaviour
                 "LastGen_ms,AvgGen_ms,GenCount," +
                 "LastBuild_ms,AvgBuild_ms,BuildCount," +
                 "TilesPerChunk,ActiveTiles," +
-                "JobQueue,PollFrames,Blocked,TotalBlocked");
+                "JobQueue,PollFrames,Blocked,TotalBlocked," +
+                "ChunksAhead,PrefetchTiles,EmaInferMs,SpeedMult,SlowFrames");
             _csv.Flush();
 
             Debug.Log($"[PerformanceMonitor] CSV log opened: {path}");
@@ -514,6 +549,12 @@ public class PerformanceMonitor : MonoBehaviour
         int csvBlocked = generator != null && generator.LastJobBlockedMainThread ? 1 : 0;
         int csvTotBlk  = generator != null ? generator.TotalBlockedCount    : 0;
 
+        int   csvAhead     = chunkScheduler != null ? chunkScheduler.ChunksAhead          : -1;
+        float csvPrefetch  = chunkScheduler != null ? chunkScheduler.PrefetchTiles        : -1f;
+        float csvEmaInfer  = chunkScheduler != null ? chunkScheduler.SmoothedInferenceMs  : -1f;
+        float csvSpeedMult = chunkScheduler != null ? chunkScheduler.SpeedMultiplier      : 1f;
+        int   csvSlowFr    = chunkScheduler != null ? chunkScheduler.TotalSlowdownFrames  : 0;
+
         _csv.WriteLine(
             $"{Time.time:F2}," +
             $"{_currentFps:F1},{_avgFps:F1},{_minFps:F1},{_frameTimeMs:F2}," +
@@ -523,7 +564,8 @@ public class PerformanceMonitor : MonoBehaviour
             $"{_lastGenMs:F2},{_avgGenMs:F2},{_genCount}," +
             $"{_lastBuildMs:F2},{_avgBuildMs:F2},{_buildCount}," +
             $"{_lastChunkTiles},{activeTiles}," +
-            $"{csvQueue},{csvPoll},{csvBlocked},{csvTotBlk}");
+            $"{csvQueue},{csvPoll},{csvBlocked},{csvTotBlk}," +
+            $"{csvAhead},{csvPrefetch:F1},{csvEmaInfer:F1},{csvSpeedMult:F3},{csvSlowFr}");
 
         _csv.Flush();
     }
