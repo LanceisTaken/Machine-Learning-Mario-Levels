@@ -89,6 +89,13 @@ public class ToadGanGenerator : MonoBehaviour
     private Dictionary<string, int> _charToId;      // stoi: char → id
     private bool _ready;
 
+    /// <summary>
+    /// Read-only reference to the id→character tile map loaded from vocab.json.
+    /// Available after <c>Start()</c> completes.  Used by
+    /// <see cref="GenerationScheduler"/> to build fallback chunks.
+    /// </summary>
+    public Dictionary<string, string> TileMap => _tileMap;
+
     // ── Async generation infrastructure ───────────────────────────────────
 
     /// <summary>FIFO queue of generation requests waiting to be processed.</summary>
