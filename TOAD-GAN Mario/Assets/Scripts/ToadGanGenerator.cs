@@ -89,6 +89,32 @@ public class ToadGanGenerator : MonoBehaviour
     private Dictionary<string, int> _charToId;      // stoi: char → id
     private bool _ready;
 
+    // ── Reusable buffers (allocated once, reused across jobs) ─────────────
+    // Jobs are sequential (one at a time) so these are never accessed
+    // concurrently, even though Phase 1/4 run on background threads.
+
+    /// <summary>Single Stopwatch reused via Restart() — avoids one object per job.</summary>
+    private readonly Stopwatch _stopwatch = new Stopwatch();
+
+    /// <summary>Backing array for the temperature scalar tensor — avoids new float[1] per job.</summary>
+    private readonly float[] _tempScalarBuf = new float[1];
+
+    /// <summary>
+    /// Per-scale noise float[] buffers.  These are the biggest allocation
+    /// savings (~1–3 MB total across 5 scales).  Only reallocated when the
+    /// required length changes (i.e. scaleH/scaleW differ between jobs).
+    /// </summary>
+    private float[][] _noiseBuffers;
+
+    /// <summary>Cached length of each entry in _noiseBuffers for resize checks.</summary>
+    private int[] _noiseLengths;
+
+    /// <summary>Per-scale [b,c,h,w] shape arrays, reused across jobs.</summary>
+    private int[][] _noiseShapes;
+
+    /// <summary>Reused container for Sentis noise tensor references — avoids new Tensor[] per job.</summary>
+    private Tensor<float>[] _noiseTensorRefs;
+
     // ── Async generation infrastructure ───────────────────────────────────
 
     /// <summary>FIFO queue of generation requests waiting to be processed.</summary>
@@ -146,6 +172,7 @@ public class ToadGanGenerator : MonoBehaviour
         {
             LoadMetaAndVocab();
             LoadModel();
+            InitReusableBuffers();
             _ready = true;
         }
         catch (Exception ex)
@@ -173,6 +200,7 @@ public class ToadGanGenerator : MonoBehaviour
     {
         if (_activeCoroutine != null)
             StopCoroutine(_activeCoroutine);
+        DisposeNoiseTensors();
         _worker?.Dispose();
     }
 
@@ -216,28 +244,23 @@ public class ToadGanGenerator : MonoBehaviour
     private IEnumerator ProcessJobCoroutine(GenerationJob job)
     {
         OnGenerationStarted?.Invoke();
-        var sw = Stopwatch.StartNew();
+        _stopwatch.Restart();
         int  pollFrames = 0;
         bool didBlock   = false;
 
-        Tensor<float>[] noiseTensors     = null;
         Tensor<float>   temperatureTensor = null;
         Tensor<float>   outputRef        = null;
         bool            asyncOk          = true;
 
         // ── Phase 1: Build noise data on a thread-pool thread ────
-        // (yield must be outside try-catch per C# CS1626)
-        float[][] noiseData   = null;
-        int[][]   noiseShapes = null;
-
+        // Reuses _noiseBuffers / _noiseShapes — only reallocates when
+        // the required size changes.  Safe because jobs are sequential.
         var noiseTask = Task.Run(() =>
         {
             var rng = job.Seed >= 0
                 ? new System.Random(job.Seed)
                 : new System.Random();
-            BuildNoiseDataThreadSafe(
-                rng, job.ScaleH, job.ScaleW,
-                out noiseData, out noiseShapes);
+            BuildNoiseDataThreadSafe(rng, job.ScaleH, job.ScaleW);
         });
 
         while (!noiseTask.IsCompleted)
@@ -249,17 +272,18 @@ public class ToadGanGenerator : MonoBehaviour
                 throw noiseTask.Exception?.InnerException ?? noiseTask.Exception;
 
             // ── Phase 2: Create tensors & schedule (main thread, fast) ──
-            temperatureTensor = new Tensor<float>(
-                new TensorShape(), new[] { job.Temperature });
+            // Reuse _tempScalarBuf to avoid new float[1] each job.
+            _tempScalarBuf[0] = job.Temperature;
+            temperatureTensor = new Tensor<float>(new TensorShape(), _tempScalarBuf);
             _worker.SetInput("temperature", temperatureTensor);
 
-            noiseTensors = new Tensor<float>[_meta.num_scales];
+            // Reuse _noiseTensorRefs container — avoids new Tensor<float>[] each job.
             for (int s = 0; s < _meta.num_scales; s++)
             {
-                int[] ns = noiseShapes[s];
+                int[] ns = _noiseShapes[s];
                 var shape = new TensorShape(ns[0], ns[1], ns[2], ns[3]);
-                noiseTensors[s] = new Tensor<float>(shape, noiseData[s]);
-                _worker.SetInput(_meta.input_names[s + 1], noiseTensors[s]);
+                _noiseTensorRefs[s] = new Tensor<float>(shape, _noiseBuffers[s]);
+                _worker.SetInput(_meta.input_names[s + 1], _noiseTensorRefs[s]);
             }
 
             _worker.Schedule();
@@ -276,14 +300,13 @@ public class ToadGanGenerator : MonoBehaviour
         }
         catch (Exception ex)
         {
-            sw.Stop();
+            _stopwatch.Stop();
             Debug.LogError($"[ToadGanGenerator] Inference failed: {ex.Message}");
             OnError?.Invoke(ex.Message);
             _activeJob       = null;
             _activeCoroutine = null;
             temperatureTensor?.Dispose();
-            if (noiseTensors != null)
-                foreach (var t in noiseTensors) t?.Dispose();
+            DisposeNoiseTensors();
             yield break;
         }
 
@@ -313,25 +336,20 @@ public class ToadGanGenerator : MonoBehaviour
         }
         catch (Exception ex)
         {
-            sw.Stop();
+            _stopwatch.Stop();
             Debug.LogError($"[ToadGanGenerator] Readback failed: {ex.Message}");
             OnError?.Invoke(ex.Message);
             _activeJob       = null;
             _activeCoroutine = null;
             temperatureTensor?.Dispose();
-            if (noiseTensors != null)
-                foreach (var t in noiseTensors) t?.Dispose();
+            DisposeNoiseTensors();
             yield break;
         }
 
+        // Release GPU resources promptly after inference completes.
         temperatureTensor?.Dispose();
         temperatureTensor = null;
-        for (int s = 0; s < (noiseTensors?.Length ?? 0); s++)
-        {
-            noiseTensors[s]?.Dispose();
-            noiseTensors[s] = null;
-        }
-        noiseTensors = null;
+        DisposeNoiseTensors();
 
         // ── Phase 4: Argmax + post-processing on background thread ──
         int[][] tileIds  = null;
@@ -354,8 +372,8 @@ public class ToadGanGenerator : MonoBehaviour
             if (postTask.IsFaulted)
                 throw postTask.Exception?.InnerException ?? postTask.Exception;
 
-            sw.Stop();
-            float durationMs = (float)sw.Elapsed.TotalMilliseconds;
+            _stopwatch.Stop();
+            float durationMs = (float)_stopwatch.Elapsed.TotalMilliseconds;
 
             LastAsyncPollFrames      = pollFrames;
             LastJobBlockedMainThread = didBlock;
@@ -371,15 +389,12 @@ public class ToadGanGenerator : MonoBehaviour
         }
         catch (Exception ex)
         {
-            sw.Stop();
+            _stopwatch.Stop();
             Debug.LogError($"[ToadGanGenerator] Post-process failed: {ex.Message}");
             OnError?.Invoke(ex.Message);
         }
         finally
         {
-            temperatureTensor?.Dispose();
-            if (noiseTensors != null)
-                foreach (var t in noiseTensors) t?.Dispose();
             _activeJob       = null;
             _activeCoroutine = null;
         }
@@ -432,16 +447,40 @@ public class ToadGanGenerator : MonoBehaviour
         }
     }
 
-    // ── Thread-safe noise generation ──────────────────────────────────────
+    // ── Reusable buffer management ──────────────────────────────────────
+
+    /// <summary>Allocate the container arrays sized for num_scales.</summary>
+    private void InitReusableBuffers()
+    {
+        int n = _meta.num_scales;
+        _noiseBuffers    = new float[n][];
+        _noiseLengths    = new int[n];
+        _noiseShapes     = new int[n][];
+        _noiseTensorRefs = new Tensor<float>[n];
+
+        for (int s = 0; s < n; s++)
+            _noiseShapes[s] = new int[4];
+    }
+
+    /// <summary>Dispose any live tensors in the reusable array and null the slots.</summary>
+    private void DisposeNoiseTensors()
+    {
+        if (_noiseTensorRefs == null) return;
+        for (int s = 0; s < _noiseTensorRefs.Length; s++)
+        {
+            _noiseTensorRefs[s]?.Dispose();
+            _noiseTensorRefs[s] = null;
+        }
+    }
+
+    // ── Thread-safe noise generation (reuses _noiseBuffers) ──────────────
     // Uses System.Random + System.Math so it can run on any thread.
+    // The reusable _noiseBuffers / _noiseLengths / _noiseShapes arrays are
+    // safe to mutate here because jobs run one at a time (sequential queue).
 
     private void BuildNoiseDataThreadSafe(
-        System.Random rng, float scaleHeight, float scaleWidth,
-        out float[][] noiseData, out int[][] noiseShapes)
+        System.Random rng, float scaleHeight, float scaleWidth)
     {
-        noiseData   = new float[_meta.num_scales][];
-        noiseShapes = new int[_meta.num_scales][];
-
         for (int s = 0; s < _meta.num_scales; s++)
         {
             int[] baseShape = _meta.pyramid_shapes[s];
@@ -450,15 +489,30 @@ public class ToadGanGenerator : MonoBehaviour
             int h = Math.Max(1, (int)Math.Round(baseShape[2] * (double)scaleHeight));
             int w = Math.Max(1, (int)Math.Round(baseShape[3] * (double)scaleWidth));
 
-            noiseShapes[s] = new[] { b, c, h, w };
-            noiseData[s]   = GaussianNoiseThreadSafe(rng, b * c * h * w);
+            _noiseShapes[s][0] = b;
+            _noiseShapes[s][1] = c;
+            _noiseShapes[s][2] = h;
+            _noiseShapes[s][3] = w;
+
+            int length = b * c * h * w;
+
+            // Only reallocate when the required length exceeds the cached buffer.
+            if (_noiseBuffers[s] == null || _noiseLengths[s] < length)
+            {
+                _noiseBuffers[s] = new float[length];
+                _noiseLengths[s] = length;
+            }
+
+            FillGaussianNoiseThreadSafe(rng, _noiseBuffers[s], length);
         }
     }
 
-    /// <summary>Box-Muller transform using System.Random (thread-safe).</summary>
-    private static float[] GaussianNoiseThreadSafe(System.Random rng, int count)
+    /// <summary>
+    /// Box-Muller in-place fill using System.Random (thread-safe).
+    /// Writes into an existing buffer — zero allocation.
+    /// </summary>
+    private static void FillGaussianNoiseThreadSafe(System.Random rng, float[] buf, int count)
     {
-        var buf = new float[count];
         for (int i = 0; i < count; i += 2)
         {
             double u1 = rng.NextDouble();
@@ -471,7 +525,6 @@ public class ToadGanGenerator : MonoBehaviour
             if (i + 1 < count)
                 buf[i + 1] = (float)(r * Math.Sin(th));
         }
-        return buf;
     }
 
     // ── Thread-safe post-processing (static — no instance state) ─────────
