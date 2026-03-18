@@ -103,10 +103,13 @@ public class ToadGanGenerator : MonoBehaviour
     /// Per-scale noise float[] buffers.  These are the biggest allocation
     /// savings (~1–3 MB total across 5 scales).  Only reallocated when the
     /// required length changes (i.e. scaleH/scaleW differ between jobs).
+    /// Written by the background thread in Phase 1, read by the main thread
+    /// in Phase 2.  Safe because the coroutine yields until Phase 1 completes,
+    /// providing a happens-before guarantee.
     /// </summary>
     private float[][] _noiseBuffers;
 
-    /// <summary>Cached length of each entry in _noiseBuffers for resize checks.</summary>
+    /// <summary>Cached length of each entry in _noiseBuffers for exact-size checks.</summary>
     private int[] _noiseLengths;
 
     /// <summary>Per-scale [b,c,h,w] shape arrays, reused across jobs.</summary>
@@ -272,7 +275,12 @@ public class ToadGanGenerator : MonoBehaviour
                 throw noiseTask.Exception?.InnerException ?? noiseTask.Exception;
 
             // ── Phase 2: Create tensors & schedule (main thread, fast) ──
-            // Reuse _tempScalarBuf to avoid new float[1] each job.
+            // Dispose the PREVIOUS job's noise tensors right before creating
+            // new ones.  This avoids invalidating the Worker's internal input
+            // bindings between Schedule() and readback completion — the Worker
+            // never sees a disposed tensor while it still has pending work.
+            DisposeNoiseTensors();
+
             _tempScalarBuf[0] = job.Temperature;
             temperatureTensor = new Tensor<float>(new TensorShape(), _tempScalarBuf);
             _worker.SetInput("temperature", temperatureTensor);
@@ -346,10 +354,12 @@ public class ToadGanGenerator : MonoBehaviour
             yield break;
         }
 
-        // Release GPU resources promptly after inference completes.
+        // Dispose the temperature tensor now (small, not reused).
+        // Noise tensors are NOT disposed here — they stay alive so the
+        // Worker's internal bindings remain valid.  They are disposed at
+        // the start of the NEXT job's Phase 2 (or in OnDestroy).
         temperatureTensor?.Dispose();
         temperatureTensor = null;
-        DisposeNoiseTensors();
 
         // ── Phase 4: Argmax + post-processing on background thread ──
         int[][] tileIds  = null;
@@ -496,8 +506,10 @@ public class ToadGanGenerator : MonoBehaviour
 
             int length = b * c * h * w;
 
-            // Only reallocate when the required length exceeds the cached buffer.
-            if (_noiseBuffers[s] == null || _noiseLengths[s] < length)
+            // Reallocate when the required length differs from the cached buffer.
+            // Using != (not <) ensures Sentis always receives an exactly-sized
+            // array, avoiding wasted GPU upload bandwidth from oversized buffers.
+            if (_noiseBuffers[s] == null || _noiseLengths[s] != length)
             {
                 _noiseBuffers[s] = new float[length];
                 _noiseLengths[s] = length;
