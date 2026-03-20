@@ -550,7 +550,7 @@ MonoBehaviour:
   fpsDropWarningThreshold: 30
   toggleKey: 96
   showOnStart: 1
-  enableCsvLogging: 1
+  enableCsvLogging: 0
   csvLogInterval: 1
 --- !u!114 &653055657
 MonoBehaviour:

@@ -433,18 +433,22 @@ public class LevelInstantiator : MonoBehaviour
                 }
 
                 float finalY = y;
-                float step   = tileSize * 0.25f;
+                float halfH  = colSize.y * 0.5f;
 
-                for (int attempts = 0; attempts < 20; attempts++)
+                // Raycast from well above the spawn point downward to find the
+                // true ground surface.  The CompositeCollider2D is a hollow
+                // shell, so OverlapBox returns null when fully inside — the
+                // downward ray hits the outer top surface reliably instead.
+                float probeHeight = 5f;
+                Vector2 rayOrigin = new Vector2(x, finalY + probeHeight);
+                RaycastHit2D surfaceHit = Physics2D.Raycast(
+                    rayOrigin, Vector2.down, probeHeight + 1f, groundLayer);
+
+                if (surfaceHit.collider != null)
                 {
-                    // Build the query center from our local finalY — no transform
-                    // reads, so there is no stale-physics-state risk.
-                    Vector2 queryCenter = new Vector2(x + colOffset.x, finalY + colOffset.y);
-
-                    if (Physics2D.OverlapBox(queryCenter, colSize * 0.95f, 0f, groundLayer) == null)
-                        break;
-
-                    finalY += step;
+                    float surfaceY = surfaceHit.point.y;
+                    if (surfaceY > finalY - halfH + 0.05f)
+                        finalY = surfaceY + halfH + 0.05f;
                 }
 
                 // Write the resolved position to both transform and Rigidbody2D so

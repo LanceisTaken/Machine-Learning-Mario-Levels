@@ -85,6 +85,13 @@ public abstract class PowerUpItem : MonoBehaviour
         // Give a small initial upward pop so it visibly emerges from the block
         _rb.linearVelocity = new Vector2(_moveDir * moveSpeed, 3f);
 
+        EntityUnstuck unstuck = GetComponent<EntityUnstuck>();
+        if (unstuck == null)
+            unstuck = gameObject.AddComponent<EntityUnstuck>();
+        LevelInstantiator li = FindFirstObjectByType<LevelInstantiator>();
+        if (li != null)
+            unstuck.groundLayer = li.groundLayer;
+
         Debug.Log($"[PowerUpItem] {name} spawned at {transform.position}. " +
                   $"RB={_rb.bodyType}, Gravity={_rb.gravityScale}, ColSize={col.size}");
     }
