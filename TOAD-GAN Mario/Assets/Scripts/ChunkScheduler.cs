@@ -33,7 +33,7 @@ using UnityEngine;
 ///   prefetchTiles = max(
 ///       minChunksAhead × chunkWidth,
 ///       (avgInferenceMs / 1000) × maxPlayerSpeed × safetyMultiplier
-///                                                × pendingJobSlots
+///                                                × maxPendingJobs
 ///   )
 ///
 /// The formula guarantees that even if the player sprints at maximum speed,
@@ -259,9 +259,14 @@ public class ChunkScheduler : MonoBehaviour
         // Built tiles remaining between the player and the current frontier.
         float builtTilesAhead = (frontierX - playerX) / ts;
 
-        // Each in-flight job (pending + active) will eventually add one
-        // chunk's worth of tiles.  Count them toward the projected frontier.
-        int inflight = generator.PendingJobCount + (generator.IsProcessing ? 1 : 0);
+        // Count ML queue + active inference, AND a chunk currently being
+        // instantiated (NextChunkX not advanced yet).  Without the latter,
+        // maxPendingJobs=1 still allows "ML finished → immediately request
+        // next chunk" while the previous chunk is still building over many
+        // frames, which looks like multiple chunks generating ahead at once.
+        int mlInflight = generator.PendingJobCount + (generator.IsProcessing ? 1 : 0);
+        int buildInflight = levelInstantiator.IsBuildingChunk ? 1 : 0;
+        int inflight      = mlInflight + buildInflight;
         float projectedTilesAhead = builtTilesAhead + inflight * chunkWidthTiles;
 
         while (projectedTilesAhead < PrefetchTiles && inflight < MaxPendingJobs)

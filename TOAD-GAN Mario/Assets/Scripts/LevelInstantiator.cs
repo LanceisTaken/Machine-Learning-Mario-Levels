@@ -97,6 +97,14 @@ public class LevelInstantiator : MonoBehaviour
     /// Zero until the first chunk is built.</summary>
     public float LastChunkWidthUnits { get; private set; }
 
+    /// <summary>
+    /// True while <see cref="BuildChunkCoroutine"/> is running (tile data received,
+    /// frontier not advanced yet). Used by <see cref="ChunkScheduler"/> so it does
+    /// not treat the pipeline as idle and spam the next ML job before this chunk
+    /// finishes building.
+    /// </summary>
+    public bool IsBuildingChunk { get; private set; }
+
     /// <summary>Prevents overlapping generation requests.</summary>
     private bool _isGenerating = false;
 
@@ -299,6 +307,7 @@ public class LevelInstantiator : MonoBehaviour
         if (needSpawn) _playerSpawned = true; // Mark now to prevent a double-spawn if another chunk arrives quickly
 
         Debug.Log($"[LevelInstantiator] Appending chunk at X={_nextChunkX}: {height}h x {width}w");
+        IsBuildingChunk = true;
         StartCoroutine(BuildChunkCoroutine(tileIds, idToChar, height, width, needSpawn));
         // _isGenerating stays true; the coroutine clears it when done
     }
@@ -480,6 +489,7 @@ public class LevelInstantiator : MonoBehaviour
                   $"Next chunk starts at X={_nextChunkX}");
 
         OnChunkBuilt?.Invoke(buildTimeMs, tilesSpawned);
+        IsBuildingChunk = false;
         _isGenerating = false;
     }
 

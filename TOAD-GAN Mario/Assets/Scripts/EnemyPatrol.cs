@@ -3,7 +3,7 @@ using UnityEngine;
 /// <summary>
 /// Basic enemy that patrols left and right, reversing direction on wall contact.
 /// Stomped by the player from above (player gets a bounce), killed by star/dash via Die().
-/// Uses raycasting for wall/edge detection to prevent getting stuck in colliders.
+/// Uses raycasting for wall detection (no pit avoidance — Goombas walk off edges).
 /// </summary>
 public class EnemyPatrol : MonoBehaviour
 {
@@ -92,20 +92,6 @@ public class EnemyPatrol : MonoBehaviour
         // Reverse direction if we hit a wall, BUT ignore hits on other enemies!
         if (wallHit.collider != null && wallHit.collider.GetComponent<EnemyPatrol>() == null)
             shouldReverse = true;
-
-        // ── Edge detection ──────────────────────────────────────────────
-        // Cast a ray downward from slightly ahead of the enemy.
-        // If there's no ground below, reverse direction to avoid falling.
-        if (!shouldReverse)
-        {
-            float edgeCheckX = _col != null ? _col.bounds.extents.x : 0.4f;
-            Vector2 edgeOrigin = origin + Vector2.right * (_direction * edgeCheckX);
-            RaycastHit2D groundHit = Physics2D.Raycast(
-                edgeOrigin, Vector2.down, 1.2f, wallLayer);
-
-            if (groundHit.collider == null)
-                shouldReverse = true;
-        }
 
         if (shouldReverse)
             _direction *= -1;

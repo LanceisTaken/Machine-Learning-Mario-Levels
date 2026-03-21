@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 539c30f337900c34babdab1cbab99197, type: 3}
   m_Name: SchedulerConfig
   m_EditorClassIdentifier: Assembly-CSharp::SchedulerConfig
-  minChunksAhead: 3
-  maxPendingJobs: 2
+  minChunksAhead: 1
+  maxPendingJobs: 1
   maxPlayerSpeed: 18
   safetyMultiplier: 1.5
   initialInferenceEstimateMs: 150

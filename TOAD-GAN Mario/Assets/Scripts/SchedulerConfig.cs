@@ -38,9 +38,11 @@ public class SchedulerConfig : ScriptableObject
     [Min(1)]
     public int minChunksAhead = 3;
 
-    [Tooltip("Maximum number of ML generation jobs that may be pending or " +
-             "in-flight simultaneously.  Prevents runaway memory use on slow " +
-             "hardware.  Set to 1 for strictly sequential generation.")]
+    [Tooltip("Maximum number of chunks allowed in the pipeline at once: ML jobs " +
+             "(queued + running) plus one chunk currently being built in the " +
+             "scene (until BuildChunkCoroutine finishes and the frontier moves). " +
+             "Prevents runaway memory use on slow hardware.  Set to 1 for strictly " +
+             "sequential pipeline (no new ML job until the current chunk is fully built).")]
     [Range(1, 8)]
     public int maxPendingJobs = 2;
 
