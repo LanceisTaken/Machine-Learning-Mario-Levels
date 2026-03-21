@@ -3,9 +3,7 @@ using UnityEngine;
 /// <summary>
 /// Basic enemy that patrols left and right, reversing direction on wall contact.
 /// Stomped by the player from above (player gets a bounce), killed by star/dash via Die().
-/// Uses a two-tier raycast for edge detection:
-///   - stairStepDepth: short ray that passses stair steps (ground 1-2 tiles lower).
-///   - pitDepth: long ray that catches true pits. Only reverse when BOTH miss.
+/// Uses raycasting for wall/edge detection to prevent getting stuck in colliders.
 /// </summary>
 public class EnemyPatrol : MonoBehaviour
 {
@@ -16,12 +14,6 @@ public class EnemyPatrol : MonoBehaviour
 
     [Tooltip("How far ahead to check for walls.")]
     public float wallCheckDistance = 0.4f;
-
-    [Tooltip("How far down (units) to probe for a stair step. ~1.5 tiles lets the enemy walk down one step.")]
-    public float stairStepDepth = 1.5f;
-
-    [Tooltip("How far down (units) to probe for a true pit. Only reverse if ground is missing at this range too.")]
-    public float pitDepth = 3.5f;
 
     private Rigidbody2D _rb;
     private Collider2D  _col;
@@ -101,24 +93,17 @@ public class EnemyPatrol : MonoBehaviour
         if (wallHit.collider != null && wallHit.collider.GetComponent<EnemyPatrol>() == null)
             shouldReverse = true;
 
-        // ── Edge detection (two-tier) ───────────────────────────────────
-        // Short probe  (stairStepDepth): finds ground on stair step-downs → don't reverse.
-        // Long probe   (pitDepth):       finds ground on larger drops → don't reverse.
-        // Only reverse when BOTH probes miss → true pit with no ground below.
+        // ── Edge detection ──────────────────────────────────────────────
+        // Cast a ray downward from slightly ahead of the enemy.
+        // If there's no ground below, reverse direction to avoid falling.
         if (!shouldReverse)
         {
             float edgeCheckX = _col != null ? _col.bounds.extents.x : 0.4f;
             Vector2 edgeOrigin = origin + Vector2.right * (_direction * edgeCheckX);
+            RaycastHit2D groundHit = Physics2D.Raycast(
+                edgeOrigin, Vector2.down, 1.2f, wallLayer);
 
-            // Offset downward slightly so probes start at the enemy's feet, not centre
-            float feetOffsetY = _col != null ? -_col.bounds.extents.y : -0.3f;
-            edgeOrigin.y += feetOffsetY;
-
-            RaycastHit2D stairHit = Physics2D.Raycast(edgeOrigin, Vector2.down, stairStepDepth, wallLayer);
-            RaycastHit2D pitHit   = Physics2D.Raycast(edgeOrigin, Vector2.down, pitDepth,       wallLayer);
-
-            bool groundNearby = stairHit.collider != null || pitHit.collider != null;
-            if (!groundNearby)
+            if (groundHit.collider == null)
                 shouldReverse = true;
         }
 

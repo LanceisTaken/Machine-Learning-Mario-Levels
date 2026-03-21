@@ -186,6 +186,7 @@ public class LevelInstantiator : MonoBehaviour
         // does NOT trigger an immediate geometry rebuild.  We call
         // GenerateGeometry() once per chunk after all tiles are placed,
         // replacing ~350 incremental rebuilds with a single one.
+        _composite.geometryType   = CompositeCollider2D.GeometryType.Polygons;
         _composite.generationType = CompositeCollider2D.GenerationType.Manual;
 
         // Put this root object on the Ground layer so the merged
@@ -436,9 +437,9 @@ public class LevelInstantiator : MonoBehaviour
                 float halfH  = colSize.y * 0.5f;
 
                 // Raycast from well above the spawn point downward to find the
-                // true ground surface.  The CompositeCollider2D is a hollow
-                // shell, so OverlapBox returns null when fully inside — the
-                // downward ray hits the outer top surface reliably instead.
+                // true ground surface.  OverlapBox fails inside the hollow
+                // CompositeCollider2D shell, but a ray from outside hits the
+                // outer top surface reliably.
                 float probeHeight = 5f;
                 Vector2 rayOrigin = new Vector2(x, finalY + probeHeight);
                 RaycastHit2D surfaceHit = Physics2D.Raycast(
@@ -447,7 +448,8 @@ public class LevelInstantiator : MonoBehaviour
                 if (surfaceHit.collider != null)
                 {
                     float surfaceY = surfaceHit.point.y;
-                    if (surfaceY > finalY - halfH + 0.05f)
+                    float entityBottom = finalY + colOffset.y - halfH;
+                    if (surfaceY > entityBottom + 0.05f)
                         finalY = surfaceY + halfH + 0.05f;
                 }
 
