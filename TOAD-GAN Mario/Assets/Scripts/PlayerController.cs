@@ -32,6 +32,9 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Layer mask for enemy detection during dash.")]
     public LayerMask enemyLayer;
 
+    [Header("Double Jump")]
+    public AudioClip doubleJumpClip;
+
     // ── Audio ──────────────────────────────────────────────────────────────
     [Header("Audio (optional)")]
     public AudioSource audioSource;
@@ -45,6 +48,7 @@ public class PlayerController : MonoBehaviour
     public bool IsBigMario   => HitPoints > 1;
     public bool IsInvincible { get; private set; }
     public int  DashCharges  { get; private set; }
+    public int  DoubleJumpCharges { get; private set; }
     public int  HitPoints    { get; private set; }
 
     // ── Private ────────────────────────────────────────────────────────────
@@ -60,6 +64,7 @@ public class PlayerController : MonoBehaviour
     private Vector2 _moveInput;
     private bool    _isDashing;
     private bool    _jumpQueued;
+    private bool    _hasUsedDoubleJump;
     private float   _dashCooldownTimer;
     private Coroutine _starCoroutine;
 
@@ -121,7 +126,10 @@ public class PlayerController : MonoBehaviour
 
         // Reset stomp/kill chain only on the frame Mario lands (airborne → grounded)
         if (_isGrounded && !_wasGroundedLastFrame && GameManager.Instance != null)
+        {
             GameManager.Instance.ResetChain();
+            _hasUsedDoubleJump = false;
+        }
 
 #if UNITY_EDITOR
         if (groundCheck == null && Time.frameCount % 300 == 0)
@@ -147,6 +155,22 @@ public class PlayerController : MonoBehaviour
             _jumpQueued      = true;  // executed in FixedUpdate to stay in sync with physics
             _jumpBufferTimer = 0f;
             _coyoteTimer     = 0f;
+        }
+        else if (jumpInputThisFrame && !_isGrounded && !_hasUsedDoubleJump && DoubleJumpCharges > 0)
+        {
+            _jumpQueued        = true;
+            _jumpBufferTimer   = 0f;
+            _hasUsedDoubleJump = true;
+            DoubleJumpCharges--;
+
+            if (audioSource != null && doubleJumpClip != null)
+                audioSource.PlayOneShot(doubleJumpClip);
+
+            if (DoubleJumpCharges <= 0)
+            {
+                UIPopup.Show("JUMP GONE", transform.position + Vector3.up, new Color(1f, 0.5f, 0.5f));
+                Debug.Log("[PlayerController] Double jump power-up expired.");
+            }
         }
 
         // ── Sprite Flip ────────────────────────────────────────────────────
@@ -234,6 +258,14 @@ public class PlayerController : MonoBehaviour
     {
         DashCharges = charges;
         Debug.Log($"[PlayerController] Dash granted: {charges} charges.");
+    }
+
+    /// <summary>Grant double-jump charges.</summary>
+    public void GrantDoubleJump(int charges = 2)
+    {
+        DoubleJumpCharges  = charges;
+        _hasUsedDoubleJump = false;
+        Debug.Log($"[PlayerController] Double-jump granted: {charges} charges.");
     }
 
     // ── Enemy contact while invincible ─────────────────────────────────────

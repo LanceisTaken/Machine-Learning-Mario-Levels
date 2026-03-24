@@ -153,6 +153,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::QuestionBlock
   superMushroomPrefab: {fileID: 3630961884811241299, guid: d2a06c59bfcc6ea4485b3f5cd818610f, type: 3}
   windDashPrefab: {fileID: 7179305686734967031, guid: 98af62e8cb8e67d4d983e2f6cc561cbc, type: 3}
+  jumpPowerUpPrefab: {fileID: 7138602765621800092, guid: d29485239471a114c88f2de618c53263, type: 3}
   usedSprite: {fileID: 0}
   spawnOffset: 1.2
   bounceHeight: 0.25

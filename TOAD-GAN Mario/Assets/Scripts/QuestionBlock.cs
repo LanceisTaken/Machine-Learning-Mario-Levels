@@ -6,7 +6,7 @@ using UnityEngine;
 ///
 /// When Mario hits the block from below, it spawns the appropriate power-up:
 ///   • Small Mario  → Super Mushroom
-///   • Big Mario    → Wind Dash Collectible
+///   • Big Mario    → random Wind Dash or Jump Power-Up (50/50 when both prefabs assigned)
 ///
 /// After being hit, the block is "used" (sprite changes to grey/empty) and
 /// cannot be hit again.
@@ -20,7 +20,7 @@ using UnityEngine;
 ///
 /// Prefab setup
 /// ------------
-///  • Assign superMushroomPrefab, windDashPrefab in the Inspector.
+///  • Assign superMushroomPrefab, windDashPrefab, jumpPowerUpPrefab in the Inspector.
 ///  • Optionally set usedSprite for the depleted appearance.
 ///  • The block needs a BoxCollider2D + Rigidbody2D (Static) on the prefab itself.
 ///  • The Player must be tagged "Player".
@@ -32,8 +32,11 @@ public class QuestionBlock : MonoBehaviour
     [Tooltip("Spawned when small Mario hits the block.")]
     public GameObject superMushroomPrefab;
 
-    [Tooltip("Spawned when big Mario hits the block.")]
+    [Tooltip("Spawned when big Mario hits the block (random pool with jump power-up).")]
     public GameObject windDashPrefab;
+
+    [Tooltip("Spawned when big Mario hits the block (random pool with wind dash).")]
+    public GameObject jumpPowerUpPrefab;
 
     [Header("Visual")]
     [Tooltip("Sprite to display after the block has been used (grey block).")]
@@ -112,9 +115,21 @@ public class QuestionBlock : MonoBehaviour
 
         // Choose which power-up to spawn
         PlayerController player = playerGo.GetComponent<PlayerController>();
-        bool isBig = player != null && player.IsBigMario;
 
-        GameObject prefabToSpawn = isBig ? windDashPrefab : superMushroomPrefab;
+        GameObject prefabToSpawn;
+        if (player == null || !player.IsBigMario)
+            prefabToSpawn = superMushroomPrefab;
+        else
+        {
+            bool haveWind = windDashPrefab != null;
+            bool haveJump = jumpPowerUpPrefab != null;
+            if (haveWind && haveJump)
+                prefabToSpawn = Random.value < 0.5f ? windDashPrefab : jumpPowerUpPrefab;
+            else if (haveWind)
+                prefabToSpawn = windDashPrefab;
+            else
+                prefabToSpawn = jumpPowerUpPrefab;
+        }
         if (prefabToSpawn != null)
         {
             Vector3 spawnPos = transform.position + Vector3.up * spawnOffset;
