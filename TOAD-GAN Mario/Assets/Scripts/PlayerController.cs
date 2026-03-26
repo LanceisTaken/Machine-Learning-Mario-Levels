@@ -19,8 +19,14 @@ public class PlayerController : MonoBehaviour
 
     // ── Health ─────────────────────────────────────────────────────────────
     [Header("Health")]
-    [Tooltip("Starting hit points. The Super Mushroom grants +1 HP (max 2).")]
-    public int startingHitPoints = 1;
+    [Tooltip("Hit points at level start.")]
+    public int startingHitPoints = 3;
+    [Tooltip("Super Mushroom adds +1 HP and cannot push total above this.")]
+    public int maxHitPoints = 99;
+
+    // ── UI ─────────────────────────────────────────────────────────────────
+    [Header("UI")]
+    public UIManager uiManager;
 
     // ── Dash ───────────────────────────────────────────────────────────────
     [Header("Wind Dash")]
@@ -44,8 +50,8 @@ public class PlayerController : MonoBehaviour
     public AudioSource normalMusicSource;
 
     // ── Public State ───────────────────────────────────────────────────────
-    /// <summary>True when Mario has collected a Super Mushroom (HP > 1).</summary>
-    public bool IsBigMario   => HitPoints > 1;
+    /// <summary>True after Mario has collected a Super Mushroom (used by ? blocks for power-up routing).</summary>
+    public bool IsBigMario => _hasSuperMushroom;
     public bool IsInvincible { get; private set; }
     public int  DashCharges  { get; private set; }
     public int  DoubleJumpCharges { get; private set; }
@@ -67,6 +73,7 @@ public class PlayerController : MonoBehaviour
     private bool    _hasUsedDoubleJump;
     private float   _dashCooldownTimer;
     private Coroutine _starCoroutine;
+    private bool    _hasSuperMushroom;
 
     // Jump-assist timers
     private float _jumpBufferTimer;   // remembers jump press for a short window
@@ -100,6 +107,19 @@ public class PlayerController : MonoBehaviour
         if (s.x < 0) { s.x = Mathf.Abs(s.x); transform.localScale = s; }
 
         HitPoints = Mathf.Max(1, startingHitPoints);
+        RefreshAllUi();
+    }
+
+    private void Start()
+    {
+        EnsureUiManager();
+        RefreshAllUi();
+    }
+
+    private void OnEnable()
+    {
+        EnsureUiManager();
+        RefreshAllUi();
     }
 
     private void Update()
@@ -162,6 +182,7 @@ public class PlayerController : MonoBehaviour
             _jumpBufferTimer   = 0f;
             _hasUsedDoubleJump = true;
             DoubleJumpCharges--;
+            SyncUiJumps();
 
             if (audioSource != null && doubleJumpClip != null)
                 audioSource.PlayOneShot(doubleJumpClip);
@@ -213,25 +234,27 @@ public class PlayerController : MonoBehaviour
     // ── Power-Up API ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Called by the Super Mushroom.
-    /// Gives Mario an extra hit point (up to 2). No visual or collider changes.
+    /// Called by the Super Mushroom. Marks Mario as big for ? blocks and adds +1 HP up to <see cref="maxHitPoints"/>.
     /// </summary>
     public void GrowBig()
     {
-        if (HitPoints >= 2) return; // already has the bonus HP
-        HitPoints = 2;
-        Debug.Log("[PlayerController] Super Mushroom collected — HP is now 2.");
+        _hasSuperMushroom = true;
+        int cap = Mathf.Max(maxHitPoints, startingHitPoints);
+        if (HitPoints < cap)
+            HitPoints = Mathf.Min(HitPoints + 1, cap);
+        SyncUiHealth();
+        Debug.Log($"[PlayerController] Super Mushroom collected — HP now {HitPoints}.");
     }
 
     /// <summary>
-    /// Called when Mario is hit while at 2 HP. Drops back to 1 HP with brief
-    /// invincibility frames to prevent instant double-hit.
+    /// Called when Mario takes damage. Loses 1 HP and gets brief i-frames.
     /// </summary>
     public void TakeHit()
     {
         if (IsInvincible) return;
 
         HitPoints--;
+        SyncUiHealth();
         Debug.Log($"[PlayerController] Hit! HP now {HitPoints}.");
 
         if (HitPoints <= 0)
@@ -256,16 +279,18 @@ public class PlayerController : MonoBehaviour
     /// <summary>Grant wind-dash charges.</summary>
     public void GrantDash(int charges = 3)
     {
-        DashCharges = charges;
-        Debug.Log($"[PlayerController] Dash granted: {charges} charges.");
+        DashCharges += Mathf.Max(0, charges);
+        SyncUiDashes();
+        Debug.Log($"[PlayerController] Dash +{charges} (total {DashCharges}).");
     }
 
     /// <summary>Grant double-jump charges.</summary>
     public void GrantDoubleJump(int charges = 2)
     {
-        DoubleJumpCharges  = charges;
+        DoubleJumpCharges += Mathf.Max(0, charges);
         _hasUsedDoubleJump = false;
-        Debug.Log($"[PlayerController] Double-jump granted: {charges} charges.");
+        SyncUiJumps();
+        Debug.Log($"[PlayerController] Double-jump +{charges} (total {DoubleJumpCharges}).");
     }
 
     // ── Enemy contact while invincible ─────────────────────────────────────
@@ -340,6 +365,7 @@ public class PlayerController : MonoBehaviour
     private IEnumerator DashCoroutine()
     {
         DashCharges--;
+        SyncUiDashes();
         _isDashing = true;
         _dashCooldownTimer = dashCooldown;
 
@@ -406,5 +432,45 @@ public class PlayerController : MonoBehaviour
 
         Gizmos.color = new Color(0f, 0.5f, 1f, 0.3f);
         Gizmos.DrawWireSphere(transform.position, dashKillRadius);
+    }
+
+    private void EnsureUiManager()
+    {
+        if (uiManager != null) return;
+
+        UIManager[] all = Object.FindObjectsByType<UIManager>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        foreach (UIManager ui in all)
+        {
+            if (ui != null && ui.healthText != null)
+            {
+                uiManager = ui;
+                return;
+            }
+        }
+
+        if (all.Length > 0)
+            uiManager = all[0];
+    }
+
+    private void RefreshAllUi()
+    {
+        SyncUiHealth();
+        SyncUiDashes();
+        SyncUiJumps();
+    }
+
+    private void SyncUiHealth()
+    {
+        if (uiManager != null) uiManager.UpdateHealth(HitPoints);
+    }
+
+    private void SyncUiDashes()
+    {
+        if (uiManager != null) uiManager.UpdateDashes(DashCharges);
+    }
+
+    private void SyncUiJumps()
+    {
+        if (uiManager != null) uiManager.UpdateJumps(DoubleJumpCharges);
     }
 }
