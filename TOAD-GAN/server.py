@@ -47,6 +47,7 @@ from generate import (
     build_unity_json,
 )
 from level_utils import load_vocab
+from constraint_report import apply_fixes_with_report, format_report
 
 # ── Globals (populated after argument parsing) ────────────────────────────────
 
@@ -58,6 +59,7 @@ _pyramid_shapes = None
 _stoi           = None
 _itos           = None
 _device         = "cpu"
+_csv_path       = None  # optional constraint CSV log
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -97,8 +99,13 @@ def generate():
         )
 
         tile_ids = tensor_to_tile_ids(output_tensor)
-        tile_ids = fix_pipes(tile_ids, _stoi)
-        tile_ids = fix_lucky_blocks(tile_ids, _stoi)
+        tile_ids, report = apply_fixes_with_report(
+            tile_ids, _stoi,
+            [fix_pipes, fix_lucky_blocks],
+            csv_path=_csv_path,
+            quiet=True,
+        )
+        app.logger.info("\n%s", format_report(report))
 
         payload = build_unity_json(tile_ids, _itos, _stoi)
 
@@ -139,11 +146,14 @@ def parse_args():
                    help="Port to listen on")
     p.add_argument("--device",      default="",
                    help="'cuda' or 'cpu'. Defaults to CUDA if available.")
+    p.add_argument("--constraint_csv", default="",
+                   help="Path to CSV file for constraint logging "
+                        "(e.g. constraint_log.csv). Omit to disable.")
     return p.parse_args()
 
 
 def main():
-    global _generators, _noise_amps, _pyramid_shapes, _stoi, _itos, _device
+    global _generators, _noise_amps, _pyramid_shapes, _stoi, _itos, _device, _csv_path
 
     args = parse_args()
 
@@ -170,6 +180,11 @@ def main():
         args.model_dir, _device, checkpoint_name=args.checkpoint
     )
     app.logger.info("Model loaded (%d scale(s)).", len(_generators))
+
+    # ── Constraint CSV ────────────────────────────────────────────────────
+    _csv_path = args.constraint_csv or None
+    if _csv_path:
+        app.logger.info("Constraint CSV logging to: %s", _csv_path)
 
     # ── Start server ─────────────────────────────────────────────────────
     app.logger.info(

@@ -1,0 +1,13 @@
+{
+  "status": "completed",
+  "wall_clock_seconds": 4562.008,
+  "wall_clock_human": "1.27 h (76.0 min)",
+  "finished_utc": "2026-04-05T12:12:42.438025+00:00",
+  "out_dir": "C:\\Users\\User\\Documents\\GitHub\\Machine-Learning---Mario-Levels\\TOAD-GAN\\output_timed",
+  "level_path": "C:\\Users\\User\\Documents\\GitHub\\Machine-Learning---Mario-Levels\\Levels\\SMB1_1.txt",
+  "vocab_path": "C:\\Users\\User\\Documents\\GitHub\\Machine-Learning---Mario-Levels\\TOAD-GAN\\vocab.json",
+  "num_scales": 5,
+  "num_epochs": 4000,
+  "scale_factor": 0.67,
+  "seed": 42
+}

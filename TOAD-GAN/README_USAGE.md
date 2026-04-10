@@ -29,7 +29,7 @@ The standalone generator script allows you to create raw `.txt`, `.png`, and `.j
 
 To generate a single level locally, run:
 ```bash
-python generate.py --model_dir output --vocab vocab.json --out generated_level.txt
+python generate.py --model_dir output/SMB1_1 --vocab vocab.json --out generated_level.txt --scale_w 0.5
 ```
 
 ***Optional Arguments:***

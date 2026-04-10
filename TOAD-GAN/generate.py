@@ -18,6 +18,7 @@ import torch.nn.functional as F
 
 from models import GeneratorBlock
 from level_utils import load_vocab, one_hot_to_level, render_level_to_png
+from constraint_report import apply_fixes_with_report
 
 
 # ── Checkpoint loading ──────────────────────────────────────────────────────
@@ -427,6 +428,9 @@ def main() -> None:
                         help="Skip PNG rendering")
     parser.add_argument("--no_json", action="store_true",
                         help="Skip JSON output")
+    parser.add_argument("--constraint_csv", default="",
+                        help="Path to CSV file for constraint logging "
+                             "(e.g. constraint_log.csv). Omit to disable.")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -451,11 +455,13 @@ def main() -> None:
             scale_w=args.scale_w,
         )
 
-        # ── Convert to tile-ID grid ──
+        # ── Convert to tile-ID grid and apply constraint repairs ──
         tile_ids = tensor_to_tile_ids(output_tensor)
-        tile_ids = fix_pipes(tile_ids, stoi)
-        tile_ids = fix_blocks_on_pipes(tile_ids, stoi)
-        tile_ids = fix_lucky_blocks(tile_ids, stoi)
+        tile_ids, _report = apply_fixes_with_report(
+            tile_ids, stoi,
+            [fix_pipes, fix_blocks_on_pipes, fix_lucky_blocks],
+            csv_path=args.constraint_csv or None,
+        )
         level_text = tile_ids_to_text(tile_ids, itos)
 
         # ── Derive output paths (append index for multi-sample) ──
