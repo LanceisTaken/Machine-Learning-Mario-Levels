@@ -93,6 +93,9 @@ public class LevelInstantiator : MonoBehaviour
     /// <summary>Read-only access for the scheduler to know the frontier position.</summary>
     public float NextChunkX => _nextChunkX;
 
+    /// <summary>World position recorded when the player was first placed (respawn target).</summary>
+    public Vector3 LastPlayerSpawnWorld { get; private set; }
+
     /// <summary>Width (in world units) of the most recently built chunk.
     /// Zero until the first chunk is built.</summary>
     public float LastChunkWidthUnits { get; private set; }
@@ -521,13 +524,25 @@ public class LevelInstantiator : MonoBehaviour
                 }
                 player.transform.position = new Vector3(x, y, 0f);
 
+                LastPlayerSpawnWorld = player.transform.position;
+
                 Debug.Log($"[LevelInstantiator] Player spawned at ({x}, {y})  " +
                           $"[ground '{GetChar(tileIds, idToChar, row, col)}' at row {row}, col {col}]");
                 return;
             }
         }
 
-        player.transform.position = new Vector3(0f, height * tileSize, 0f);
+        float fx = 0f;
+        float fy = height * tileSize;
+        var fb = player.GetComponent<Rigidbody2D>();
+        if (fb != null)
+        {
+            fb.position = new Vector2(fx, fy);
+            fb.linearVelocity = Vector2.zero;
+        }
+        player.transform.position = new Vector3(fx, fy, 0f);
+        LastPlayerSpawnWorld = player.transform.position;
+
         Debug.LogWarning("[LevelInstantiator] No safe spawn found, using fallback.");
     }
 

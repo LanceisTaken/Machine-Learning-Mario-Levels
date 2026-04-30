@@ -131,7 +131,7 @@ BoxCollider2D:
   m_SpriteTilingProperty:
     border: {x: 0, y: 0, z: 0, w: 0}
     pivot: {x: 0.5, y: 0.5}
-    oldSize: {x: 1, y: 0.9848485}
+    oldSize: {x: 1, y: 1}
     newSize: {x: 1, y: 1}
     adaptiveTilingThreshold: 0.5
     drawMode: 0
@@ -154,7 +154,10 @@ MonoBehaviour:
   superMushroomPrefab: {fileID: 3630961884811241299, guid: d2a06c59bfcc6ea4485b3f5cd818610f, type: 3}
   windDashPrefab: {fileID: 7179305686734967031, guid: 98af62e8cb8e67d4d983e2f6cc561cbc, type: 3}
   jumpPowerUpPrefab: {fileID: 7138602765621800092, guid: d29485239471a114c88f2de618c53263, type: 3}
-  usedSprite: {fileID: 0}
+  usedSprite: {fileID: 4247999720495791942, guid: 0c5fe50cd3a717c45ae8f1baf746eb74, type: 3}
+  usedTint: {r: 1, g: 1, b: 1, a: 1}
+  flashCount: 3
+  flashInterval: 0.02
   spawnOffset: 1.2
   bounceHeight: 0.25
   bounceDuration: 0.12

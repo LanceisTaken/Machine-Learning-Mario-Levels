@@ -24,6 +24,10 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Super Mushroom adds +1 HP and cannot push total above this.")]
     public int maxHitPoints = 99;
 
+    [Header("Void / pit")]
+    [Tooltip("World Y below which Mario loses a life (void). Tune if your level floor is lower.")]
+    public float pitDeathY = -40f;
+
     // ── UI ─────────────────────────────────────────────────────────────────
     [Header("UI")]
     public UIManager uiManager;
@@ -74,6 +78,8 @@ public class PlayerController : MonoBehaviour
     private float   _dashCooldownTimer;
     private Coroutine _starCoroutine;
     private bool    _hasSuperMushroom;
+    private float   _defaultGravityScale;
+    private bool    _deathLock;
 
     // Jump-assist timers
     private float _jumpBufferTimer;   // remembers jump press for a short window
@@ -90,6 +96,7 @@ public class PlayerController : MonoBehaviour
         _dashTrail = GetComponent<DashTrail>();
 
         _rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+        _defaultGravityScale = _rb.gravityScale;
 
         // Frictionless material so player doesn't stick to walls
         if (_col != null && _col.sharedMaterial == null)
@@ -208,6 +215,12 @@ public class PlayerController : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (isActiveAndEnabled && transform.position.y < pitDeathY)
+        {
+            DieFromVoid();
+            return;
+        }
+
         if (_isDashing) return;
 
         if (_jumpQueued)
@@ -257,16 +270,79 @@ public class PlayerController : MonoBehaviour
         SyncUiHealth();
         Debug.Log($"[PlayerController] Hit! HP now {HitPoints}.");
 
-        if (HitPoints <= 0)
-        {
-            Debug.Log("[PlayerController] Mario is dead! (Add game-over logic here.)");
-            // TODO: trigger death / respawn
-        }
-        else
-        {
-            // Brief invincibility so the player can't be hit twice in one frame
+        if (HitPoints > 0)
             StartCoroutine(HitInvincibilityCoroutine());
+        else
+            HandleOutOfHealth();
+    }
+
+    /// <summary>Lose a stock from falling into the void (bypasses star / hit i-frames).</summary>
+    private void DieFromVoid()
+    {
+        if (_deathLock || !isActiveAndEnabled) return;
+
+        HitPoints = 0;
+        SyncUiHealth();
+        HandleOutOfHealth();
+    }
+
+    private void HandleOutOfHealth()
+    {
+        if (_deathLock) return;
+        _deathLock = true;
+
+        Debug.Log("[PlayerController] Game Over.");
+        Time.timeScale = 0f;
+
+        RestartManager.EnsureExists();
+        RestartManager.Instance.ShowRestartButton();
+    }
+
+    private void RespawnAfterLifeLost()
+    {
+        StopAllCoroutines();
+        _starCoroutine = null;
+        _isDashing = false;
+        _dashCooldownTimer = 0f;
+        _jumpQueued = false;
+        _jumpBufferTimer = 0f;
+        _coyoteTimer = 0f;
+        _hasUsedDoubleJump = false;
+
+        _dashTrail?.StopTrail();
+
+        if (_rb != null)
+        {
+            _rb.gravityScale = _defaultGravityScale;
+            _rb.linearVelocity = Vector2.zero;
+            _rb.angularVelocity = 0f;
         }
+
+        if (audioSource != null) audioSource.Stop();
+        if (normalMusicSource != null) normalMusicSource.UnPause();
+
+        IsInvincible = false;
+        if (_sr != null)
+        {
+            _sr.enabled = true;
+            _sr.color = Color.white;
+        }
+
+        HitPoints = Mathf.Max(1, startingHitPoints);
+        _hasSuperMushroom = false;
+
+        LevelInstantiator li = FindFirstObjectByType<LevelInstantiator>();
+        Vector3 spawn = li != null ? li.LastPlayerSpawnWorld : transform.position;
+        if (_rb != null)
+            _rb.position = new Vector2(spawn.x, spawn.y);
+        transform.position = spawn;
+
+        GameManager.Instance?.ResetChain();
+
+        EnsureUiManager();
+        RefreshAllUi();
+        RestartManager.Instance?.HideRestartButton();
+        Debug.Log("[PlayerController] Respawned after losing a life.");
     }
 
     /// <summary>Activate star invincibility for <paramref name="duration"/> seconds.</summary>
@@ -334,7 +410,7 @@ public class PlayerController : MonoBehaviour
 
         if (audioSource != null && starMusicClip != null)
         {
-            normalMusicSource?.Pause();
+            if (normalMusicSource != null) normalMusicSource.Pause();
             audioSource.clip = starMusicClip;
             audioSource.loop = true;
             audioSource.Play();
@@ -357,7 +433,7 @@ public class PlayerController : MonoBehaviour
         GameManager.Instance?.ResetChain();
 
         if (audioSource != null) audioSource.Stop();
-        normalMusicSource?.UnPause();
+        if (normalMusicSource != null) normalMusicSource.UnPause();
 
         Debug.Log("[PlayerController] Star power ended.");
     }

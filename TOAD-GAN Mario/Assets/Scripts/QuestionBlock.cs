@@ -39,8 +39,17 @@ public class QuestionBlock : MonoBehaviour
     public GameObject jumpPowerUpPrefab;
 
     [Header("Visual")]
-    [Tooltip("Sprite to display after the block has been used (grey block).")]
+    [Tooltip("Sprite to display after the block has been used (grey/empty block). Assign this in the Inspector.")]
     public Sprite usedSprite;
+
+    [Tooltip("Colour tint applied to the used sprite (default grey to look depleted).")]
+    public Color usedTint = new Color(0.55f, 0.55f, 0.55f, 1f);
+
+    [Tooltip("How many times the sprite flashes white before settling on usedSprite.")]
+    public int flashCount = 3;
+
+    [Tooltip("Duration (seconds) of each flash half-cycle.")]
+    public float flashInterval = 0.05f;
 
     [Tooltip("How far above the block centre the item spawns.")]
     public float spawnOffset = 1.2f;
@@ -109,12 +118,12 @@ public class QuestionBlock : MonoBehaviour
             GameManager.Instance.AddScore(200);
         UIPopup.Show("+200", transform.position + Vector3.up * 0.5f, Color.yellow);
 
-        // Swap to used/depleted sprite
-        if (_sr != null && usedSprite != null)
-            _sr.sprite = usedSprite;
+        // Swap to used/depleted sprite with a brief flash transition
+        StartCoroutine(SpriteTransition());
 
         // Choose which power-up to spawn
-        PlayerController player = playerGo.GetComponent<PlayerController>();
+        PlayerController player = playerGo.GetComponent<PlayerController>()
+                                 ?? playerGo.GetComponentInParent<PlayerController>();
 
         GameObject prefabToSpawn;
         if (player == null || !player.IsBigMario)
@@ -154,5 +163,30 @@ public class QuestionBlock : MonoBehaviour
             yield return null;
         }
         transform.position = _originPos;
+    }
+
+    /// <summary>
+    /// Flashes the block white several times, then switches to the used sprite with a grey tint.
+    /// If no usedSprite is assigned the block simply flashes and stays on its original sprite.
+    /// </summary>
+    private IEnumerator SpriteTransition()
+    {
+        if (_sr == null) yield break;
+
+        Color originalColor = _sr.color;
+
+        for (int i = 0; i < flashCount; i++)
+        {
+            _sr.color = Color.white;
+            yield return new WaitForSeconds(flashInterval);
+            _sr.color = originalColor;
+            yield return new WaitForSeconds(flashInterval);
+        }
+
+        if (usedSprite != null)
+        {
+            _sr.sprite = usedSprite;
+            _sr.color  = usedTint;
+        }
     }
 }

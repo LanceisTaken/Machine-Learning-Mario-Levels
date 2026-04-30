@@ -137,6 +137,9 @@ public class EnemyPatrol : MonoBehaviour
 
         if (!col.gameObject.CompareTag("Player")) return;
 
+        PlayerController pc = col.gameObject.GetComponent<PlayerController>()
+                           ?? col.gameObject.GetComponentInParent<PlayerController>();
+
         // Player landed on top → stomp kill
         if (col.GetContact(0).normal.y < -0.5f)
         {
@@ -149,8 +152,8 @@ public class EnemyPatrol : MonoBehaviour
                 UIPopup.Show(label, transform.position + Vector3.up * 0.5f, clr);
             }
 
-            // Give player a small bounce
-            var playerRb = col.gameObject.GetComponent<Rigidbody2D>();
+            // Give player a small bounce (RB usually lives on the object with PlayerController)
+            Rigidbody2D playerRb = pc != null ? pc.GetComponent<Rigidbody2D>() : null;
             if (playerRb != null)
                 playerRb.linearVelocity = new Vector2(playerRb.linearVelocity.x, 8f);
 
@@ -159,7 +162,6 @@ public class EnemyPatrol : MonoBehaviour
         else
         {
             // Enemy hit player from the side → damage player
-            PlayerController pc = col.gameObject.GetComponent<PlayerController>();
             if (pc != null)
                 pc.TakeHit(); // handles HP, invincibility frames, and death
         }
