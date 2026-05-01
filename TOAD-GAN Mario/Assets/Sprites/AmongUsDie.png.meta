@@ -1,0 +1,689 @@
+fileFormatVersion: 2
+guid: 0ea25286633fcb84bb960eac322566e7
+TextureImporter:
+  internalIDToNameTable:
+  - first:
+      213: -6667723288961694066
+    second: AmongUsDie_0
+  - first:
+      213: 2697285004050883578
+    second: AmongUsDie_1
+  - first:
+      213: 6079230721379038638
+    second: AmongUsDie_2
+  - first:
+      213: -1206030236821550834
+    second: AmongUsDie_3
+  - first:
+      213: 4873879549108161005
+    second: AmongUsDie_4
+  - first:
+      213: -2308947085258557453
+    second: AmongUsDie_5
+  - first:
+      213: -4854976468285938963
+    second: AmongUsDie_6
+  - first:
+      213: -2622143378891867988
+    second: AmongUsDie_7
+  - first:
+      213: -6930661982264365745
+    second: AmongUsDie_8
+  - first:
+      213: 546976084829828099
+    second: AmongUsDie_9
+  - first:
+      213: -474506621049315525
+    second: AmongUsDie_10
+  - first:
+      213: -124967005850179448
+    second: AmongUsDie_11
+  - first:
+      213: 966077665679794737
+    second: AmongUsDie_12
+  - first:
+      213: -3692909296073459802
+    second: AmongUsDie_13
+  - first:
+      213: 8187792257197646852
+    second: AmongUsDie_14
+  - first:
+      213: 5912251786609220134
+    second: AmongUsDie_15
+  - first:
+      213: 1521707485689643494
+    second: AmongUsDie_16
+  - first:
+      213: -6509846921054873541
+    second: AmongUsDie_17
+  - first:
+      213: -7027087952049118955
+    second: AmongUsDie_18
+  - first:
+      213: 9114293027155471680
+    second: AmongUsDie_19
+  - first:
+      213: -2654127600684103162
+    second: AmongUsDie_20
+  - first:
+      213: 635190292987306053
+    second: AmongUsDie_21
+  externalObjects: {}
+  serializedVersion: 13
+  mipmaps:
+    mipMapMode: 0
+    enableMipMap: 0
+    sRGBTexture: 1
+    linearTexture: 0
+    fadeOut: 0
+    borderMipMap: 0
+    mipMapsPreserveCoverage: 0
+    alphaTestReferenceValue: 0.5
+    mipMapFadeDistanceStart: 1
+    mipMapFadeDistanceEnd: 3
+  bumpmap:
+    convertToNormalMap: 0
+    externalNormalMap: 0
+    heightScale: 0.25
+    normalMapFilter: 0
+    flipGreenChannel: 0
+  isReadable: 0
+  streamingMipmaps: 0
+  streamingMipmapsPriority: 0
+  vTOnly: 0
+  ignoreMipmapLimit: 0
+  grayScaleToAlpha: 0
+  generateCubemap: 6
+  cubemapConvolution: 0
+  seamlessCubemap: 0
+  textureFormat: 1
+  maxTextureSize: 2048
+  textureSettings:
+    serializedVersion: 2
+    filterMode: 1
+    aniso: 1
+    mipBias: 0
+    wrapU: 1
+    wrapV: 1
+    wrapW: 1
+  nPOTScale: 0
+  lightmap: 0
+  compressionQuality: 50
+  spriteMode: 2
+  spriteExtrude: 1
+  spriteMeshType: 1
+  alignment: 0
+  spritePivot: {x: 0.5, y: 0.5}
+  spritePixelsToUnits: 100
+  spriteBorder: {x: 0, y: 0, z: 0, w: 0}
+  spriteGenerateFallbackPhysicsShape: 1
+  alphaUsage: 1
+  alphaIsTransparency: 1
+  spriteTessellationDetail: -1
+  textureType: 8
+  textureShape: 1
+  singleChannelComponent: 0
+  flipbookRows: 1
+  flipbookColumns: 1
+  maxTextureSizeSet: 0
+  compressionQualitySet: 0
+  textureFormatSet: 0
+  ignorePngGamma: 0
+  applyGammaDecoding: 0
+  swizzle: 50462976
+  cookieLightType: 0
+  platformSettings:
+  - serializedVersion: 4
+    buildTarget: DefaultTexturePlatform
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 1
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  - serializedVersion: 4
+    buildTarget: Standalone
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 1
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  spriteSheet:
+    serializedVersion: 2
+    sprites:
+    - serializedVersion: 2
+      name: AmongUsDie_0
+      rect:
+        serializedVersion: 2
+        x: 3
+        y: 0
+        width: 25
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: e86c6dceefc7773a0800000000000000
+      internalID: -6667723288961694066
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_1
+      rect:
+        serializedVersion: 2
+        x: 67
+        y: 0
+        width: 25
+        height: 28
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: af3e07c9b6eae6520800000000000000
+      internalID: 2697285004050883578
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_2
+      rect:
+        serializedVersion: 2
+        x: 131
+        y: 0
+        width: 26
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: ea57077c124cd5450800000000000000
+      internalID: 6079230721379038638
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_3
+      rect:
+        serializedVersion: 2
+        x: 195
+        y: 0
+        width: 27
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: e090fd1b3e1534fe0800000000000000
+      internalID: -1206030236821550834
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_4
+      rect:
+        serializedVersion: 2
+        x: 259
+        y: 0
+        width: 29
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: de902a280af73a340800000000000000
+      internalID: 4873879549108161005
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_5
+      rect:
+        serializedVersion: 2
+        x: 323
+        y: 0
+        width: 31
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 3f77df9fbd8f4ffd0800000000000000
+      internalID: -2308947085258557453
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_6
+      rect:
+        serializedVersion: 2
+        x: 387
+        y: 0
+        width: 35
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: de2afe6ff98af9cb0800000000000000
+      internalID: -4854976468285938963
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_7
+      rect:
+        serializedVersion: 2
+        x: 451
+        y: 0
+        width: 38
+        height: 29
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: ca8f1075d764c9bd0800000000000000
+      internalID: -2622143378891867988
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_8
+      rect:
+        serializedVersion: 2
+        x: 515
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: f4de3d8b5a751df90800000000000000
+      internalID: -6930661982264365745
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_9
+      rect:
+        serializedVersion: 2
+        x: 532
+        y: 4
+        width: 26
+        height: 21
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 3047ae4e9df379700800000000000000
+      internalID: 546976084829828099
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_10
+      rect:
+        serializedVersion: 2
+        x: 579
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: b3fd8c00eb63a69f0800000000000000
+      internalID: -474506621049315525
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_11
+      rect:
+        serializedVersion: 2
+        x: 602
+        y: 0
+        width: 18
+        height: 24
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 888e7a79b27044ef0800000000000000
+      internalID: -124967005850179448
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_12
+      rect:
+        serializedVersion: 2
+        x: 643
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 1326848b482386d00800000000000000
+      internalID: 966077665679794737
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_13
+      rect:
+        serializedVersion: 2
+        x: 666
+        y: 0
+        width: 18
+        height: 24
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 6a7bdc3af8620ccc0800000000000000
+      internalID: -3692909296073459802
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_14
+      rect:
+        serializedVersion: 2
+        x: 707
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 404a5f85da1e0a170800000000000000
+      internalID: 8187792257197646852
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_15
+      rect:
+        serializedVersion: 2
+        x: 730
+        y: 0
+        width: 18
+        height: 24
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 62ad28beca98c0250800000000000000
+      internalID: 5912251786609220134
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_16
+      rect:
+        serializedVersion: 2
+        x: 771
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 6e1859855e03e1510800000000000000
+      internalID: 1521707485689643494
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_17
+      rect:
+        serializedVersion: 2
+        x: 794
+        y: 0
+        width: 18
+        height: 24
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: b389a5847b068a5a0800000000000000
+      internalID: -6509846921054873541
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_18
+      rect:
+        serializedVersion: 2
+        x: 835
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 5116fac1db4ca7e90800000000000000
+      internalID: -7027087952049118955
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_19
+      rect:
+        serializedVersion: 2
+        x: 858
+        y: 0
+        width: 18
+        height: 24
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 04deb66f7397c7e70800000000000000
+      internalID: 9114293027155471680
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_20
+      rect:
+        serializedVersion: 2
+        x: 899
+        y: 0
+        width: 24
+        height: 18
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 60a0aa46205aa2bd0800000000000000
+      internalID: -2654127600684103162
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: AmongUsDie_21
+      rect:
+        serializedVersion: 2
+        x: 922
+        y: 0
+        width: 18
+        height: 24
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 540e842c436a0d800800000000000000
+      internalID: 635190292987306053
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    outline: []
+    customData: 
+    physicsShape: []
+    bones: []
+    spriteID: 
+    internalID: 0
+    vertices: []
+    indices: 
+    edges: []
+    weights: []
+    secondaryTextures: []
+    spriteCustomMetadata:
+      entries: []
+    nameFileIdTable:
+      AmongUsDie_0: -6667723288961694066
+      AmongUsDie_1: 2697285004050883578
+      AmongUsDie_10: -474506621049315525
+      AmongUsDie_11: -124967005850179448
+      AmongUsDie_12: 966077665679794737
+      AmongUsDie_13: -3692909296073459802
+      AmongUsDie_14: 8187792257197646852
+      AmongUsDie_15: 5912251786609220134
+      AmongUsDie_16: 1521707485689643494
+      AmongUsDie_17: -6509846921054873541
+      AmongUsDie_18: -7027087952049118955
+      AmongUsDie_19: 9114293027155471680
+      AmongUsDie_2: 6079230721379038638
+      AmongUsDie_20: -2654127600684103162
+      AmongUsDie_21: 635190292987306053
+      AmongUsDie_3: -1206030236821550834
+      AmongUsDie_4: 4873879549108161005
+      AmongUsDie_5: -2308947085258557453
+      AmongUsDie_6: -4854976468285938963
+      AmongUsDie_7: -2622143378891867988
+      AmongUsDie_8: -6930661982264365745
+      AmongUsDie_9: 546976084829828099
+  mipmapLimitGroupName: 
+  pSDRemoveMatte: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

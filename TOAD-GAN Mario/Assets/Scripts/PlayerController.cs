@@ -66,6 +66,7 @@ public class PlayerController : MonoBehaviour
     private SpriteRenderer _sr;
     private BoxCollider2D  _col;
     private DashTrail      _dashTrail;
+    private Animator       _anim;
 
     private static readonly Collider2D[] _dashOverlapBuffer = new Collider2D[8];
 
@@ -94,6 +95,7 @@ public class PlayerController : MonoBehaviour
         _sr        = GetComponent<SpriteRenderer>();
         _col       = GetComponent<BoxCollider2D>();
         _dashTrail = GetComponent<DashTrail>();
+        _anim      = GetComponent<Animator>();
 
         _rb.interpolation = RigidbodyInterpolation2D.Interpolate;
         _defaultGravityScale = _rb.gravityScale;
@@ -182,10 +184,12 @@ public class PlayerController : MonoBehaviour
             _jumpQueued      = true;  // executed in FixedUpdate to stay in sync with physics
             _jumpBufferTimer = 0f;
             _coyoteTimer     = 0f;
+            if (_anim != null) _anim.SetTrigger("Jump");
         }
         else if (jumpInputThisFrame && !_isGrounded && !_hasUsedDoubleJump && DoubleJumpCharges > 0)
         {
             _jumpQueued        = true;
+            if (_anim != null) _anim.SetTrigger("Jump");
             _jumpBufferTimer   = 0f;
             _hasUsedDoubleJump = true;
             DoubleJumpCharges--;
@@ -211,6 +215,16 @@ public class PlayerController : MonoBehaviour
                            Keyboard.current.rightShiftKey.wasPressedThisFrame;
         if (dashPressed && DashCharges > 0 && _dashCooldownTimer <= 0f)
             StartCoroutine(DashCoroutine());
+
+        SyncAnimatorParameters();
+    }
+
+    private void SyncAnimatorParameters()
+    {
+        if (_anim == null) return;
+
+        _anim.SetFloat("Speed", Mathf.Abs(_moveInput.x));
+        _anim.SetBool("Grounded", _isGrounded);
     }
 
     private void FixedUpdate()
